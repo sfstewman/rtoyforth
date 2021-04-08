@@ -5,10 +5,109 @@ enum Data {
     Ptr(usize),
 }
 
+const WORD_HIGH_BIT : u32 = 0x8000_0000;
+const WORD_SIGN_BIT : u32 = 0x4000_0000;
+const WORD_INT_MASK : u32 = 0x7fff_ffff;
+
+const WORD_XT_MASK  : u32 = 0x3fff_ffff;
+const WORD_STR_MASK : u32 = 0x3fff_ffff;
+const WORD_XT_BITS  : u32 = WORD_HIGH_BIT | WORD_SIGN_BIT;
+const WORD_STR_BITS : u32 = WORD_HIGH_BIT;
+
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+struct Word(u32);
+
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+struct XT(u32);
+
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+struct ST(u32);
+
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+enum WordKind {
+    Int(i32),
+    XT(XT),
+    Str(ST),
+}
+
+impl Word {
+    fn int(x: i32) -> Word {
+        // TODO: range check
+        Word((x as u32) & WORD_INT_MASK)
+    }
+
+    fn xt(x: u32) -> Word {
+        // TODO: range check
+        Word((x & WORD_XT_MASK) | WORD_XT_BITS)
+    }
+
+    fn str(x: u32) -> Word {
+        // TODO: range check
+        Word((x & WORD_STR_MASK) | WORD_STR_BITS)
+    }
+
+    fn kind(&self) -> WordKind {
+        match self.0 {
+            x if (x & WORD_HIGH_BIT) == 0 => { WordKind::Int((x | ((x & WORD_SIGN_BIT) << 1)) as i32) },
+            x if (x & WORD_SIGN_BIT) == 0 => { WordKind::Str(ST(x & WORD_STR_MASK)) },
+            x => { WordKind::XT(XT(x & WORD_XT_MASK)) },
+        }
+    }
+
+    fn to_int(self) -> Option<i32> {
+        if let WordKind::Int(x) = self.kind() { Some(x) } else { None }
+    }
+
+    fn to_xt(self) -> Option<XT> {
+        if let WordKind::XT(x) = self.kind() { Some(x) } else { None }
+    }
+
+    fn to_str(self) -> Option<ST> {
+        if let WordKind::Str(x) = self.kind() { Some(x) } else { None }
+    }
+}
+
+impl std::fmt::Display for Word {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self.kind() {
+            WordKind::Int(x) => { formatter.write_fmt(format_args!("[int] {}", x)) },
+            WordKind::XT(XT(x))  => { formatter.write_fmt(format_args!("[xt] {}", x)) },
+            WordKind::Str(ST(x))  => { formatter.write_fmt(format_args!("[st] {}", x)) },
+        }
+    }
+}
+
+// type PrimFunc = fn(&mut ToyForth, Word);
+struct PrimFunc(fn(&mut ToyForth, Word) -> Result<(),ForthError>);
+
+impl PartialEq for PrimFunc {
+    fn eq(&self, other: &PrimFunc) -> bool {
+        return (self.0 as usize) == (other.0 as usize)
+    }
+}
+
+impl Eq for PrimFunc { }
+
+
+
+/*
+const PRIM_PUSH : u8 = 0;
+const PRIM_DROP : u8 = 1;
+const PRIM_SWAP : u8 = 2;
+const PRIM_STOP : u8 = 3;
+*/
+
+#[derive(Debug)]
+enum Instr {
+    Prim(PrimFunc, Word),
+    DoCol(XT, Word),
+}
+
 struct ToyForth {
-    data_stack: Vec<Data>,
-    dict: Vec<Data>,
-    names: std::collections::HashMap<String,usize>,
+    dstack: Vec<Word>,
+    code: Vec<Instr>,
+    // rstack: Vec<Word>,
+    // names: std::collections::HashMap<String,usize>,
 }
 
 #[derive(Debug,PartialEq)]
@@ -286,13 +385,129 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
+const MATH_PLUS  : u32 = 0;
+const MATH_MINUS : u32 = 1;
+const MATH_STAR  : u32 = 2;
+const MATH_SLASH : u32 = 3;
+
+enum ForthError {
+    Stop,
+    StackUnderflow,
+    InvalidOperation,
+    InvalidArguments,
+    DivisionByZero,
+}
+
 impl ToyForth {
     fn new() -> ToyForth {
-        return ToyForth{
-            data_stack: Vec::new(),
-            dict: Vec::new(),
-            names: std::collections::HashMap::new(),
+        let mut tf = ToyForth{
+            dstack: Vec::new(),
+            code: Vec::new(),
         };
+
+        return tf;
+    }
+
+    fn push(&mut self, w: Word) -> Result<(), ForthError> {
+        self.dstack.push(w);
+        Ok(())
+    }
+
+    fn drop(&mut self, _: Word) -> Result<(), ForthError> {
+        if let Some(_) = self.dstack.pop() {
+            Ok(())
+        } else {
+            Err(ForthError::StackUnderflow)
+        }
+    }
+
+    fn swap(&mut self, _: Word) -> Result<(), ForthError> {
+        let len = self.dstack.len();
+        if len >= 2 {
+            self.dstack[..].swap(len-2,len-1);
+            Ok(())
+        } else {
+            Err(ForthError::StackUnderflow)
+        }
+    }
+
+    fn math(&mut self, op: Word) -> Result<(),ForthError> {
+        let op1 = self.popkind();
+        let op2 = self.popkind();
+
+        if let None = op1 {
+            return Err(ForthError::StackUnderflow);
+        }
+
+        if let None = op2 {
+            return Err(ForthError::StackUnderflow);
+        }
+
+        if let (Some(WordKind::Int(b)), Some(WordKind::Int(a))) = (op1,op2) {
+            match op.0 {
+                MATH_PLUS  => { self.push(Word::int(a+b)); },
+                MATH_MINUS => { self.push(Word::int(a-b)); },
+                MATH_STAR  => { self.push(Word::int(a*b)); },
+                MATH_SLASH => {
+                    if b != 0 {
+                        self.push(Word::int(a/b));
+                    } else {
+                        return Err(ForthError::DivisionByZero);
+                    }
+                },
+                _ => {
+                    return Err(ForthError::InvalidOperation);
+                }
+            }
+
+            return Ok(());
+        } else {
+            return Err(ForthError::InvalidArguments);
+        }
+    }
+
+    fn stop(&mut self, _: Word) -> Result<(), ForthError> {
+        Err(ForthError::Stop)
+    }
+
+    // nb: pop is only called from rust, so it's not a forth primitive
+    fn pop(&mut self) -> Option<Word> {
+        self.dstack.pop()
+    }
+
+    fn popkind(&mut self) -> Option<WordKind> {
+        if let Some(x) = self.dstack.pop() {
+            Some(x.kind())
+        } else {
+            None
+        }
+    }
+
+    fn run(&mut self, code: &[Instr], off: u32) -> Result<(), ForthError> {
+        // TODO: bounds check
+
+        let mut pc = off;
+        let mut stop = false;
+
+        loop {
+            eprintln!("pc = {}, code[pc] = {:?}", pc, &code[pc as usize]);
+            match &code[pc as usize] {
+
+                Instr::Prim(p,_) if p == &PRIM_STOP => {
+                    return Ok(());
+                },
+                Instr::Prim(p,w) => {
+                    let f = p.0;
+                    f(self,*w)?;
+
+                    pc += 1;
+                },
+                Instr::DoCol(ind, _) => {
+                },
+            }
+
+            eprintln!("stop = {}", stop);
+        }
     }
 
     fn process_token(&mut self, tok: LexToken) -> Result<(), String> {
@@ -305,7 +520,7 @@ impl ToyForth {
             */
         } else {
             let data = Data::from_token(tok)?;
-            self.data_stack.push(data);
+            // self.data_stack.push(data);
         }
         Ok(())
     }
@@ -313,10 +528,31 @@ impl ToyForth {
     fn parse<'a>(&mut self, line: &'a str) -> Result<(), LexError1<'a>> {
         for tok_or_err in tokenize(line) {
             let tok = tok_or_err?;
-            self.process_token(tok);
+            if let Err(s) = self.process_token(tok) {
+                eprintln!("error: {}", s);
+            }
         }
 
         return Ok(());
+    }
+}
+
+const PRIM_PUSH : PrimFunc = PrimFunc(ToyForth::push);
+const PRIM_DROP : PrimFunc = PrimFunc(ToyForth::drop);
+const PRIM_SWAP : PrimFunc = PrimFunc(ToyForth::swap);
+const PRIM_MATH : PrimFunc = PrimFunc(ToyForth::math);
+const PRIM_STOP : PrimFunc = PrimFunc(ToyForth::stop);
+
+impl std::fmt::Debug for PrimFunc {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut name = 
+            if self == &PRIM_PUSH { "push" }
+            else if self == &PRIM_DROP { "drop" }
+            else if self == &PRIM_SWAP { "swap" }
+            else if self == &PRIM_STOP{ "stop" }
+            else { "unknown" };
+
+        fmt.write_fmt(format_args!("PrimFunc[{}]", name))
     }
 }
 
@@ -365,7 +601,7 @@ fn main() {
     let mut in_handle = stdin.lock();
     let mut out_handle = stdout.lock();
 
-    if let Err(err) = repl("> ", &mut in_handle, &mut out_handle) {
+    if let Err(err) = repl("ok\n", &mut in_handle, &mut out_handle) {
         println!("Error encountered: {}", err);
     }
 }
@@ -436,4 +672,130 @@ mod tests {
             Err(LexError1{ error: LexErrorType::UnterminatedString, source: &s[27..] }),
         ]);
     }
+
+    #[test]
+    fn words() {
+        assert_eq!(Word::int(123).to_int().unwrap(), 123);
+        assert_eq!(Word::int(-123).to_int().unwrap(), -123);
+
+        assert_eq!(Word::xt(123).to_xt().unwrap(), XT(123));
+
+        assert_eq!(Word::str(123).to_str().unwrap(), ST(123));
+
+        assert_eq!(Word::xt(123).to_int(), None);
+        assert_eq!(Word::xt(123).to_str(), None);
+
+        assert_eq!(Word::str(123).to_int(), None);
+        assert_eq!(Word::str(123).to_xt(), None);
+
+        assert_eq!(Word::int(123).to_xt(), None);
+        assert_eq!(Word::int(123).to_str(), None);
+
+        assert_eq!(Word::int(-123).to_xt(), None);
+        assert_eq!(Word::int(-123).to_str(), None);
+    }
+
+    #[test]
+    fn stack_prims() {
+        let mut forth = ToyForth::new();
+        forth.push(Word::int( 123));
+        forth.push(Word::int(-123));
+        assert_eq!(forth.pop().unwrap(), Word::int(-123));
+        assert_eq!(forth.pop().unwrap(), Word::int( 123));
+
+        forth.push(Word::int( 123));
+        forth.push(Word::int(-123));
+        forth.swap(Word::int(0));
+        assert_eq!(forth.pop().unwrap(), Word::int( 123));
+        assert_eq!(forth.pop().unwrap(), Word::int(-123));
+    }
+
+    /*
+    #[test]
+    fn can_allocate_entries() {
+        let mut forth = ToyForth::new();
+        let xt = forth.allot(4);
+        let mut entries = forth.get_entries_mut(xt);
+    }
+    */
+
+    /*
+    #[test]
+    fn can_define() {
+        let mut forth = ToyForth::new();
+
+        let xt = forth.allot(4);
+        let mut entries = forth.get_entries_mut(xt);
+
+        entries[0] = Instr::Prim(PRIM_PUSH, Word::int(4314));
+        entries[0] = Instr::Prim(PRIM_PUSH, Word::int(-132));
+        entries[0] = Instr::Prim(PRIM_PUSH, Word::int(
+    }
+    */
+
+    #[test]
+    fn run_stack_manip() {
+        let mut forth = ToyForth::new();
+
+        let code = vec![
+            Instr::Prim(PRIM_PUSH, Word::int(4314)),
+            Instr::Prim(PRIM_PUSH, Word::int(-132)),
+            Instr::Prim(PRIM_PUSH, Word::int(-999)),
+            Instr::Prim(PRIM_SWAP, Word::int(0)),
+            Instr::Prim(PRIM_DROP, Word::int(0)),
+            Instr::Prim(PRIM_STOP, Word::int(0)),
+        ];
+
+        forth.run(&code, 0);
+        assert_eq!(forth.pop().unwrap(), Word::int(-999));
+        assert_eq!(forth.pop().unwrap(), Word::int(4314));
+        assert_eq!(forth.pop(), None);
+    }
+
+    #[test]
+    fn run_arith() {
+        let mut forth = ToyForth::new();
+
+        let code = vec![
+            Instr::Prim(PRIM_PUSH, Word::int(4314)),
+            Instr::Prim(PRIM_PUSH, Word::int(-132)),
+            Instr::Prim(PRIM_MATH, Word(MATH_PLUS)),
+            Instr::Prim(PRIM_PUSH, Word::int(-10)),
+            Instr::Prim(PRIM_MATH, Word(MATH_STAR)),
+            Instr::Prim(PRIM_STOP, Word::int(0)),
+        ];
+
+        forth.run(&code, 0);
+        assert_eq!(forth.pop().unwrap(), Word::int(-41820));
+        assert_eq!(forth.pop(), None);
+    }
+
+    #[test]
+    fn add_colon_def() {
+        let mut forth = ToyForth::new();
+
+    }
+
+    /*
+    #[test]
+    fn run_colon_def() {
+        let mut forth = ToyForth::new();
+
+        let code = vec![
+            Instr::Prim(PRIM_PUSH, Word::int(4314)),
+            Instr::Prim(PRIM_PUSH, Word::int(-132)),
+            Instr::Prim(PRIM_MATH, Word(MATH_PLUS)),
+            Instr::Prim(PRIM_PUSH, Word::int(-10)),
+            Instr::Prim(PRIM_MATH, Word(MATH_STAR)),
+            Instr::Prim(PRIM_STOP, Word::int(0)),
+        ];
+
+        forth.run(&code, 0);
+        assert_eq!(forth.pop().unwrap(), Word::int(-41820));
+        assert_eq!(forth.pop(), None);
+    }
+    */
 }
+
+
+
