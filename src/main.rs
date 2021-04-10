@@ -27,6 +27,10 @@ impl XT {
     const MIN : u32 = 0;
     const MASK : u32 = 0x3fff_ffff;
     const BITS : u32 = Word::HIGH_BIT | Word::SIGN_BIT;
+
+    fn to_word(self) -> Word {
+        Word::xt(self.0)
+    }
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
@@ -202,6 +206,7 @@ impl std::fmt::Display for Word {
     }
 }
 
+/*
 #[derive(Clone,Copy)]
 struct PrimFunc(fn(&mut ToyForth, Word) -> Result<(),ForthError>);
 
@@ -212,30 +217,32 @@ impl PartialEq for PrimFunc {
 }
 
 impl Eq for PrimFunc { }
+*/
 
-/*
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum Primitive {
     Stop,
-    Push,
+    Push(Word),
     Drop,
+    Dup,
     Swap,
-    Math,
+    Math{op:u8},
     EOL,
     Lookup,
     DefStr,
     DefWord,
     Word,
+    Char,
 }
-*/
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum Instr {
     Empty,
-    Prim(PrimFunc, Word),
-    DoCol(XT, Word),
+    Prim(Primitive),
+    DoCol(XT),
     Special(),
-    Data(Word,Word),
-    Char([u8;2*std::mem::size_of::<Word>()]),
+    Data(Word),
+    // Char{bytes:[u8;std::mem::size_of::<Word>()]},
     Execute,
     Unnest,
 }
@@ -544,10 +551,10 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-const MATH_PLUS  : u32 = 0;
-const MATH_MINUS : u32 = 1;
-const MATH_STAR  : u32 = 2;
-const MATH_SLASH : u32 = 3;
+const MATH_PLUS  : u8 = 0;
+const MATH_MINUS : u8 = 1;
+const MATH_STAR  : u8 = 2;
+const MATH_SLASH : u8 = 3;
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum ForthError {
@@ -589,12 +596,13 @@ impl ToyForth {
         };
 
         // set up standard dictionary
-        tf.add_word("STOP", &[Instr::Prim(PRIM_STOP, Word::int(0))]);
+        tf.add_word("STOP", &[Instr::Prim(Primitive::Stop)]);
+        /*
         tf.add_word("CHAR", &[Instr::Prim(PRIM_BI_CHAR, Word::int(0))]);
 
         tf.add_word("BL", &[
-            Instr::Prim(PRIM_PUSH, Word::int(' ' as i32)),
-            Instr::Prim(PRIM_STOP, Word(0)),
+            Instr::Prim(Primitive::Push(Word::int(' ' as i32))),
+            Instr::Prim(Primitive::Stop),
         ]);
 
         tf.add_word("CR", &[
@@ -604,8 +612,11 @@ impl ToyForth {
 
         // tf.add_word("'", &[Instr::Prim(
         // tf.push_cell(Instr::Prim(PRIM_STOP, Word::int(0)));
+        */
 
         eprintln!("Cell size is {}", std::mem::size_of::<Instr>());
+        eprintln!("Prim size is {}", std::mem::size_of::<Primitive>());
+        eprintln!("Word size is {}", std::mem::size_of::<Word>());
 
         return tf;
     }
@@ -824,7 +835,7 @@ impl ToyForth {
         self.push(Word::int(v))
     }
 
-    fn drop(&mut self, _: Word) -> Result<(), ForthError> {
+    fn drop(&mut self) -> Result<(), ForthError> {
         if let Some(_) = self.dstack.pop() {
             Ok(())
         } else {
@@ -832,7 +843,13 @@ impl ToyForth {
         }
     }
 
-    fn swap(&mut self, _: Word) -> Result<(), ForthError> {
+    fn dup(&mut self) -> Result<(), ForthError> {
+        let w = self.peek().ok_or(ForthError::StackUnderflow)?;
+        self.push(w)?;
+        Ok(())
+    }
+
+    fn swap(&mut self) -> Result<(), ForthError> {
         let len = self.dstack.len();
         if len >= 2 {
             self.dstack[..].swap(len-2,len-1);
@@ -842,7 +859,7 @@ impl ToyForth {
         }
     }
 
-    fn math(&mut self, op: Word) -> Result<(),ForthError> {
+    fn math(&mut self, op: u8) -> Result<(),ForthError> {
         let op1 = self.pop_kind();
         let op2 = self.pop_kind();
 
@@ -855,7 +872,7 @@ impl ToyForth {
         }
 
         if let (Some(WordKind::Int(b)), Some(WordKind::Int(a))) = (op1,op2) {
-            match op.0 {
+            match op {
                 MATH_PLUS  => { self.push(Word::int(a+b)); },
                 MATH_MINUS => { self.push(Word::int(a-b)); },
                 MATH_STAR  => { self.push(Word::int(a*b)); },
@@ -881,7 +898,7 @@ impl ToyForth {
         Err(ForthError::Stop)
     }
 
-    fn input_eol(&mut self, _src: Word) -> Result<(), ForthError> {
+    fn input_eol(&mut self) -> Result<(), ForthError> {
         let ilen = self.input.len();
         if ilen > Word::INT_MAX as usize {
             return Err(ForthError::NumberOutOfRange);
@@ -891,7 +908,7 @@ impl ToyForth {
         Ok(())
     }
 
-    fn builtin_find(&mut self, _src: Word) -> Result<(), ForthError> {
+    fn builtin_find(&mut self) -> Result<(), ForthError> {
         let st = self.pop_str()?;
         let s = self.maybe_string_at(st)?;
 
@@ -912,14 +929,21 @@ impl ToyForth {
         }
     }
 
-    fn builtin_execute(&mut self, _src: Word) -> Result<(),ForthError> {
+    fn lookup_stop(&self) -> Result<XT,ForthError> {
+        // stop always at word 0.
+        Ok(XT(0))
+    }
+
+    fn builtin_execute(&mut self) -> Result<(),ForthError> {
         let xt = self.pop_xt()?;
-        self.rstack.push(Word::xt(0));
+        let stop_xt = self.lookup_stop()?;
+
+        self.rstack.push(stop_xt.to_word());
 
         self.exec(xt)
     }
 
-    fn input_lookup(&mut self, _src: Word) -> Result<(), ForthError> {
+    fn input_lookup(&mut self) -> Result<(), ForthError> {
         let i1 = self.pop_int()?;
         let i0 = self.pop_int()?;
 
@@ -936,7 +960,7 @@ impl ToyForth {
         }
     }
 
-    fn defstr(&mut self, _src: Word) -> Result<(), ForthError> {
+    fn defstr(&mut self) -> Result<(), ForthError> {
         let i1 = self.pop_int()?;
         let i0 = self.pop_int()?;
 
@@ -953,7 +977,7 @@ impl ToyForth {
         }
     }
 
-    fn defword(&mut self, _src: Word) -> Result<(), ForthError> {
+    fn defword(&mut self) -> Result<(), ForthError> {
         let arg0 = self.pop_kind();
         let arg1 = self.pop_kind();
 
@@ -1002,7 +1026,7 @@ impl ToyForth {
         return (i0,i0+i1);
     }
 
-    fn builtin_char(&mut self, _src: Word) -> Result<(), ForthError> {
+    fn builtin_char(&mut self) -> Result<(), ForthError> {
         let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), ' ' as u8);
 
         let off = self.input_off+w0;
@@ -1024,7 +1048,7 @@ impl ToyForth {
         }
     }
 
-    fn builtin_word(&mut self, _src: Word) -> Result<(), ForthError> {
+    fn builtin_word(&mut self) -> Result<(), ForthError> {
         let delim = self.pop_delim()?;
 
         let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), delim);
@@ -1101,19 +1125,59 @@ impl ToyForth {
             let op = &self.code[pc as usize];
             eprintln!("pc = {}, code[pc] = {:?}", pc, op);
             match op {
-                Instr::Empty | Instr::Special() | Instr::Char(_) | Instr::Data(_,_) => {
+                // Instr::Empty | Instr::Special() | Instr::Char{..} | Instr::Data(_) => {
+                Instr::Empty | Instr::Special() | Instr::Data(_) => {
                     return Err(ForthError::InvalidCell(XT(pc)));
                 },
-                Instr::Prim(p,_) if p == &PRIM_STOP => {
+                Instr::Prim(Primitive::Stop) => {
                     return Ok(());
                 },
-                Instr::Prim(p,w) => {
-                    let f = p.0;
-                    f(self,*w)?;
-
+                Instr::Prim(Primitive::Push(w)) => {
+                    self.push(*w)?;
                     pc += 1;
                 },
-                Instr::DoCol(new_pc, _) => {
+                Instr::Prim(Primitive::Drop) => {
+                    self.drop()?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::Dup) => {
+                    self.dup()?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::Swap) => {
+                    self.swap()?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::Math{op:op}) => {
+                    self.math(*op)?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::EOL) => {
+                    self.input_eol()?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::Lookup) => {
+                    self.input_lookup()?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::DefStr) => {
+                    self.defstr()?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::DefWord) => {
+                    self.defword()?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::Word) => {
+                    self.builtin_word()?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::Char) => {
+                    self.builtin_char()?;
+                    pc += 1;
+                },
+
+                Instr::DoCol(new_pc) => {
                     self.rstack.push(Word::xt(pc+1));
                     pc = new_pc.0;
                 },
@@ -1160,6 +1224,7 @@ impl ToyForth {
     }
 }
 
+/*
 const PRIM_PUSH    : PrimFunc = PrimFunc(ToyForth::push);
 const PRIM_DROP    : PrimFunc = PrimFunc(ToyForth::drop);
 const PRIM_SWAP    : PrimFunc = PrimFunc(ToyForth::swap);
@@ -1171,7 +1236,9 @@ const PRIM_DEFSTR  : PrimFunc = PrimFunc(ToyForth::defstr);
 const PRIM_DEFWORD : PrimFunc = PrimFunc(ToyForth::defword);
 const PRIM_BI_WORD : PrimFunc = PrimFunc(ToyForth::builtin_word);  // built-in WORD, for bootstrapping
 const PRIM_BI_CHAR : PrimFunc = PrimFunc(ToyForth::builtin_char);  // built-in WORD, for bootstrapping
+*/
 
+/*
 impl std::fmt::Debug for PrimFunc {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut name = 
@@ -1189,6 +1256,7 @@ impl std::fmt::Debug for PrimFunc {
         fmt.write_fmt(format_args!("PrimFunc[{}]", name))
     }
 }
+*/
 
 impl std::fmt::Display for Token {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -1339,9 +1407,14 @@ mod tests {
 
         forth.push(Word::int( 123));
         forth.push(Word::int(-123));
-        forth.swap(Word::int(0));
+        forth.swap();
         assert_eq!(forth.pop().unwrap(), Word::int( 123));
         assert_eq!(forth.pop().unwrap(), Word::int(-123));
+
+        forth.push(Word::int( 123));
+        forth.dup();
+        assert_eq!(forth.pop().unwrap(), Word::int(123));
+        assert_eq!(forth.pop().unwrap(), Word::int(123));
     }
 
     #[test]
@@ -1375,12 +1448,12 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let code = vec![
-            Instr::Prim(PRIM_PUSH, Word::int(4314)),
-            Instr::Prim(PRIM_PUSH, Word::int(-132)),
-            Instr::Prim(PRIM_PUSH, Word::int(-999)),
-            Instr::Prim(PRIM_SWAP, Word::int(0)),
-            Instr::Prim(PRIM_DROP, Word::int(0)),
-            Instr::Prim(PRIM_STOP, Word::int(0)),
+            Instr::Prim(Primitive::Push(Word::int(4314))),
+            Instr::Prim(Primitive::Push(Word::int(-132))),
+            Instr::Prim(Primitive::Push(Word::int(-999))),
+            Instr::Prim(Primitive::Swap),
+            Instr::Prim(Primitive::Drop),
+            Instr::Prim(Primitive::Stop),
         ];
 
         let xt = forth.add_code(&code);
@@ -1396,24 +1469,23 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let code = vec![
-            Instr::Prim(PRIM_PUSH, Word::int(4314)),
-            Instr::Prim(PRIM_PUSH, Word::int(-132)),
-            Instr::Prim(PRIM_MATH, Word(MATH_PLUS)),
-            Instr::Prim(PRIM_PUSH, Word::int(-10)),
-            Instr::Prim(PRIM_MATH, Word(MATH_STAR)),
-            Instr::Prim(PRIM_STOP, Word::int(0)),
+            Instr::Prim(Primitive::Push(Word::int(4314))),
+            Instr::Prim(Primitive::Push(Word::int(-132))),
+            Instr::Prim(Primitive::Math{op:MATH_PLUS}),
+            Instr::Prim(Primitive::Push(Word::int(-10))),
+            Instr::Prim(Primitive::Math{op:MATH_STAR}),
+            Instr::Prim(Primitive::Stop),
         ];
 
         let xt = forth.add_code(&code);
         forth.exec(xt).unwrap();
 
-        // forth.run(&code, 0);
         assert_eq!(forth.pop().unwrap(), Word::int(-41820));
         assert_eq!(forth.pop(), None);
     }
 
     #[test]
-    fn run_colon_def() {
+    fn run_dictionary_entry() {
         let mut forth = ToyForth::new();
 
         let (xt0,entries) = forth.allocate_cells(5);
@@ -1421,16 +1493,16 @@ mod tests {
         assert_eq!(entries.len(), 5);
 
         /* f(x) = 2*x + 1 */
-        entries[0] = Instr::Prim(PRIM_PUSH, Word::int(2));
-        entries[1] = Instr::Prim(PRIM_MATH, Word(MATH_STAR));
-        entries[2] = Instr::Prim(PRIM_PUSH, Word::int(1));
-        entries[3] = Instr::Prim(PRIM_MATH, Word(MATH_PLUS));
+        entries[0] = Instr::Prim(Primitive::Push(Word::int(2)));
+        entries[1] = Instr::Prim(Primitive::Math{op:MATH_STAR});
+        entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
+        entries[3] = Instr::Prim(Primitive::Math{op:MATH_PLUS});
         entries[4] = Instr::Unnest;
 
         let xt1 = forth.add_code(&vec![
-            Instr::Prim(PRIM_PUSH, Word::int(2)),
-            Instr::DoCol(xt0, Word(0)),
-            Instr::Prim(PRIM_STOP, Word::int(0)),
+            Instr::Prim(Primitive::Push(Word::int(2))),
+            Instr::DoCol(xt0),
+            Instr::Prim(Primitive::Stop),
         ]);
 
         forth.exec(xt1);
@@ -1446,10 +1518,10 @@ mod tests {
         assert_eq!(entries.len(), 5);
 
         /* f(x) = 2*x + 1 */
-        entries[0] = Instr::Prim(PRIM_PUSH, Word::int(2));
-        entries[1] = Instr::Prim(PRIM_MATH, Word(MATH_STAR));
-        entries[2] = Instr::Prim(PRIM_PUSH, Word::int(1));
-        entries[3] = Instr::Prim(PRIM_MATH, Word(MATH_PLUS));
+        entries[0] = Instr::Prim(Primitive::Push(Word::int(2)));
+        entries[1] = Instr::Prim(Primitive::Math{op:MATH_STAR});
+        entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
+        entries[3] = Instr::Prim(Primitive::Math{op:MATH_PLUS});
         entries[4] = Instr::Unnest;
 
         forth.define_word("my_func", xt).unwrap();
@@ -1465,10 +1537,10 @@ mod tests {
         let xt = forth.mark_cell();
 
         /* f(x) = 2*x + 1 */
-        forth.push_cell(Instr::Prim(PRIM_PUSH, Word::int(2)));
-        forth.push_cell(Instr::Prim(PRIM_MATH, Word(MATH_STAR)));
-        forth.push_cell(Instr::Prim(PRIM_PUSH, Word::int(1)));
-        forth.push_cell(Instr::Prim(PRIM_MATH, Word(MATH_PLUS)));
+        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(2))));
+        forth.push_cell(Instr::Prim(Primitive::Math{op:MATH_STAR}));
+        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
+        forth.push_cell(Instr::Prim(Primitive::Math{op:MATH_PLUS}));
         forth.push_cell(Instr::Unnest);
 
         let st = forth.define_word("my_func", xt).unwrap();
@@ -1478,10 +1550,10 @@ mod tests {
 
         let immed = forth.mark_cell();
 
-        forth.push_cell(Instr::Prim(PRIM_PUSH,   Word::int(0)));
-        forth.push_cell(Instr::Prim(PRIM_EOL,    Word(0)));
-        forth.push_cell(Instr::Prim(PRIM_LOOKUP, Word(0)));
-        forth.push_cell(Instr::Prim(PRIM_STOP,   Word(0)));
+        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(0))));
+        forth.push_cell(Instr::Prim(Primitive::EOL));
+        forth.push_cell(Instr::Prim(Primitive::Lookup));
+        forth.push_cell(Instr::Prim(Primitive::Stop));
 
         forth.input.push_str("my_func");
         forth.exec(immed);
@@ -1497,22 +1569,22 @@ mod tests {
         let xt = forth.mark_cell();
 
         /* f(x) = 2*x + 1 */
-        forth.push_cell(Instr::Prim(PRIM_PUSH, Word::int(2)));
-        forth.push_cell(Instr::Prim(PRIM_MATH, Word(MATH_STAR)));
-        forth.push_cell(Instr::Prim(PRIM_PUSH, Word::int(1)));
-        forth.push_cell(Instr::Prim(PRIM_MATH, Word(MATH_PLUS)));
+        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(2))));
+        forth.push_cell(Instr::Prim(Primitive::Math{op:MATH_STAR}));
+        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
+        forth.push_cell(Instr::Prim(Primitive::Math{op:MATH_PLUS}));
         forth.push_cell(Instr::Unnest);
 
         forth.input.push_str("my_func");
 
         {
             let immed = forth.mark_cell();
-            forth.push_cell(Instr::Prim(PRIM_PUSH,   Word::int(0)));
-            forth.push_cell(Instr::Prim(PRIM_EOL,    Word(0)));
-            forth.push_cell(Instr::Prim(PRIM_DEFSTR, Word(0)));
-            forth.push_cell(Instr::Prim(PRIM_PUSH,   Word::from_xt(xt)));
-            forth.push_cell(Instr::Prim(PRIM_DEFWORD, Word(0)));
-            forth.push_cell(Instr::Prim(PRIM_STOP,   Word(0)));
+            forth.push_cell(Instr::Prim(Primitive::Push(Word::int(0))));
+            forth.push_cell(Instr::Prim(Primitive::EOL));
+            forth.push_cell(Instr::Prim(Primitive::DefStr));
+            forth.push_cell(Instr::Prim(Primitive::Push(Word::from_xt(xt))));
+            forth.push_cell(Instr::Prim(Primitive::DefWord));
+            forth.push_cell(Instr::Prim(Primitive::Stop));
 
             forth.exec(immed).unwrap();
         }
@@ -1520,10 +1592,10 @@ mod tests {
         {
             let immed = forth.mark_cell();
 
-            forth.push_cell(Instr::Prim(PRIM_PUSH,   Word::int(0)));
-            forth.push_cell(Instr::Prim(PRIM_EOL,    Word(0)));
-            forth.push_cell(Instr::Prim(PRIM_LOOKUP, Word(0)));
-            forth.push_cell(Instr::Prim(PRIM_STOP,   Word(0)));
+            forth.push_cell(Instr::Prim(Primitive::Push(Word::int(0))));
+            forth.push_cell(Instr::Prim(Primitive::EOL));
+            forth.push_cell(Instr::Prim(Primitive::Lookup));
+            forth.push_cell(Instr::Prim(Primitive::Stop));
 
             forth.exec(immed).unwrap();
         }
@@ -1540,27 +1612,27 @@ mod tests {
         forth.input_off = 0;
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 3);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(2,1)));
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 9);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(5,4)));
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 13);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(10,3)));
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 17);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(14,3)));
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
         eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
@@ -1568,7 +1640,7 @@ mod tests {
 
         // make sure we can search again and it's well behaved...
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
         eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
@@ -1582,29 +1654,29 @@ mod tests {
         forth.input.push_str("  x  test foo bar   ");
         forth.input_off = 0;
 
-        forth.builtin_char(Word(0)).unwrap();
+        forth.builtin_char().unwrap();
         assert_eq!(forth.input_off, 3);
         assert_eq!(forth.pop_int().unwrap(), 'x' as i32);
 
-        forth.builtin_char(Word(0)).unwrap();
+        forth.builtin_char().unwrap();
         assert_eq!(forth.input_off, 9);
         assert_eq!(forth.pop_int().unwrap(), 't' as i32);
 
-        forth.builtin_char(Word(0)).unwrap();
+        forth.builtin_char().unwrap();
         assert_eq!(forth.input_off, 13);
         assert_eq!(forth.pop_int().unwrap(), 'f' as i32);
 
-        forth.builtin_char(Word(0)).unwrap();
+        forth.builtin_char().unwrap();
         assert_eq!(forth.input_off, 17);
         assert_eq!(forth.pop_int().unwrap(), 'b' as i32);
 
         // out of words, make sure this is an error!
-        assert_eq!(forth.builtin_char(Word(0)).unwrap_err(), ForthError::InvalidEmptyString);
+        assert_eq!(forth.builtin_char().unwrap_err(), ForthError::InvalidEmptyString);
         assert_eq!(forth.input_off, 20);
         assert_eq!(forth.stack_depth(), 0);
 
         // make sure we can search again and it's well behaved...
-        assert_eq!(forth.builtin_char(Word(0)).unwrap_err(), ForthError::InvalidEmptyString);
+        assert_eq!(forth.builtin_char().unwrap_err(), ForthError::InvalidEmptyString);
         assert_eq!(forth.input_off, 20);
         assert_eq!(forth.stack_depth(), 0);
     }
@@ -1617,27 +1689,27 @@ mod tests {
         forth.input_off = 0;
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 3);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(2,1)));
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 9);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(5,4)));
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 13);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(10,3)));
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 17);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(14,3)));
 
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
         eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
@@ -1645,7 +1717,7 @@ mod tests {
 
         // make sure we can search again and it's well behaved...
         forth.push_int(' ' as i32);
-        forth.builtin_word(Word(0)).unwrap();
+        forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
         eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
@@ -1657,10 +1729,10 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let xt = forth.add_word("my_func", &vec![
-           Instr::Prim(PRIM_PUSH, Word::int(2)),
-           Instr::Prim(PRIM_MATH, Word(MATH_STAR)),
-           Instr::Prim(PRIM_PUSH, Word::int(1)),
-           Instr::Prim(PRIM_MATH, Word(MATH_PLUS)),
+           Instr::Prim(Primitive::Push(Word::int(2))),
+           Instr::Prim(Primitive::Math{op:MATH_STAR}),
+           Instr::Prim(Primitive::Push(Word::int(1))),
+           Instr::Prim(Primitive::Math{op:MATH_PLUS}),
            Instr::Unnest,
         ]).unwrap();
 
@@ -1668,7 +1740,7 @@ mod tests {
         let st = forth.pad_str("test").unwrap();
         forth.push(st.to_word());
         eprintln!("stack top: {:?}", forth.peek());
-        forth.builtin_find(Word(0)).unwrap();
+        forth.builtin_find().unwrap();
 
         assert_eq!(forth.pop_int().unwrap(), 0);
         assert_eq!(forth.pop_kind().unwrap(), WordKind::Str(st));
@@ -1676,7 +1748,7 @@ mod tests {
         let st = forth.pad_str("my_func").unwrap();
         forth.push(st.to_word());
         eprintln!("stack top: {:?}", forth.peek());
-        forth.builtin_find(Word(0)).unwrap();
+        forth.builtin_find().unwrap();
 
         assert_eq!(forth.pop_int().unwrap(), 1);
         assert_eq!(forth.pop_kind().unwrap(), WordKind::XT(xt));
@@ -1687,10 +1759,10 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let xt = forth.add_word("my_func", &vec![
-           Instr::Prim(PRIM_PUSH, Word::int(2)),
-           Instr::Prim(PRIM_MATH, Word(MATH_STAR)),
-           Instr::Prim(PRIM_PUSH, Word::int(1)),
-           Instr::Prim(PRIM_MATH, Word(MATH_PLUS)),
+           Instr::Prim(Primitive::Push(Word::int(2))),
+           Instr::Prim(Primitive::Math{op:MATH_STAR}),
+           Instr::Prim(Primitive::Push(Word::int(1))),
+           Instr::Prim(Primitive::Math{op:MATH_PLUS}),
            Instr::Unnest,
         ]).unwrap();
 
@@ -1699,12 +1771,11 @@ mod tests {
         let st = forth.pad_str("my_func").unwrap();
         forth.push(st.to_word());
         eprintln!("stack top: {:?}", forth.peek());
-        forth.builtin_find(Word(0)).unwrap();
+        forth.builtin_find().unwrap();
 
         assert_eq!(forth.pop_int().unwrap(), 1);
-        forth.builtin_execute(Word(0)).unwrap();
+        forth.builtin_execute().unwrap();
         assert_eq!(forth.pop_int().unwrap(), 2469);
     }
-
 }
 
