@@ -909,7 +909,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<XT,ForthError> {
-        let st = self.push_string(word)?;
+        self.push_string(word)?;
         let func_ind = self.ufuncs.len();
 
         if func_ind > 0xffff_ffff {
