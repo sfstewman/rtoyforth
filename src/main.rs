@@ -714,13 +714,17 @@ impl ToyForth {
         eprintln!("done\n");
     }
 
-    pub fn builtin_interpret(&mut self, s: &str) -> Result<(), ForthError> {
+    pub fn interpret(&mut self, s: &str) -> Result<(), ForthError> {
         // initial interpret is dumb...
 
         self.input.clear();
         self.input_off = 0;
         self.input.push_str(s);
 
+        self.builtin_interpret()
+    }
+
+    pub fn builtin_interpret(&mut self) -> Result<(), ForthError> {
         loop {
             self.push_int(' ' as i32)?;
             self.builtin_word()?;
@@ -2022,7 +2026,7 @@ mod tests {
             Ok(())
         }).unwrap();
 
-        forth.builtin_interpret("my_func").unwrap();
+        forth.interpret("my_func").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 123);
     }
@@ -2034,7 +2038,7 @@ mod tests {
         forth.add_primitive("ONE", Primitive::Push(Word::int(1))).unwrap();
         forth.add_primitive("TWO", Primitive::Push(Word::int(2))).unwrap();
 
-        forth.builtin_interpret("ONE DUP").unwrap();
+        forth.interpret("ONE DUP").unwrap();
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), 1);
         assert_eq!(forth.pop_int().unwrap(), 1);
@@ -2071,12 +2075,12 @@ mod tests {
     fn can_interpret_numbers() {
         let mut forth = ToyForth::new();
 
-        forth.builtin_interpret("1 2").unwrap();
+        forth.interpret("1 2").unwrap();
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), 2);
         assert_eq!(forth.pop_int().unwrap(), 1);
 
-        forth.builtin_interpret("1 2 +").unwrap();
+        forth.interpret("1 2 +").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 3);
     }
