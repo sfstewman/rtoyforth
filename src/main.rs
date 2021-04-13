@@ -36,6 +36,11 @@ impl XT {
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 struct ScratchLoc{len:u8, off:u8}
 
+/*
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+struct AllocLoc(u32);
+*/
+
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 enum ST {
     // TODO: Check size.  This needs to fit in 32 bits.
@@ -81,8 +86,55 @@ impl ST {
         }
     }
 
-    fn allocated_space(off: u32) -> ST {
-        ST::Allocated(off)
+    fn addr(self) -> u32 {
+        match self {
+            ST::Allocated(val) => {
+                val >> 8
+            },
+            ST::PadSpace(loc) | ST::WordSpace(loc) | ST::InputSpace(loc) => {
+                loc.off as u32
+            },
+        }
+    }
+
+    fn len(self) -> u32 {
+        match self {
+            ST::Allocated(val) => {
+                val & 0xff
+            },
+            ST::PadSpace(loc) | ST::WordSpace(loc) | ST::InputSpace(loc) => {
+                loc.len as u32
+            },
+        }
+    }
+
+    fn offset(self, by: u8) -> ST {
+        let addr = self.addr();
+        let len  = self.len();
+
+        let off = std::cmp::min(by as u32,len);
+
+        let new_addr = addr + off;
+        let new_len  = (len - off) as u8;
+        match self {
+            ST::Allocated(_) => {
+                ST::allocated_space(new_addr, new_len)
+            },
+            ST::PadSpace(_) => {
+                ST::pad_space(new_addr as u8, new_len)
+            },
+            ST::WordSpace(_) => {
+                ST::word_space(new_addr as u8, new_len)
+            },
+            ST::InputSpace(_) => {
+                ST::input_space(new_addr as u8, new_len)
+            },
+        }
+    }
+
+    fn allocated_space(off: u32, len: u8) -> ST {
+        // TODO: check for overflow
+        ST::Allocated((off<<8) | (len as u32))
     }
 
     fn pad_space(off: u8, len: u8) -> ST {
@@ -151,15 +203,15 @@ impl Word {
         Word((x & WORD_STR_MASK) | WORD_STR_BITS)
     }
 
-    fn from_xt(xt: XT) -> Word {
+    pub fn from_xt(xt: XT) -> Word {
         Word::xt(xt.0)
     }
 
-    fn from_str(st: ST) -> Word {
+    pub fn from_str(st: ST) -> Word {
         st.to_word()
     }
 
-    fn kind(self) -> WordKind {
+    pub fn kind(self) -> WordKind {
         match self.0 {
             x if (x & WORD_HIGH_BIT) == 0 => { WordKind::Int((x | ((x & WORD_SIGN_BIT) << 1)) as i32) },
             x if (x & WORD_SIGN_BIT) == 0 => {
@@ -170,15 +222,15 @@ impl Word {
         }
     }
 
-    fn to_int(self) -> Option<i32> {
+    pub fn to_int(self) -> Option<i32> {
         if let WordKind::Int(x) = self.kind() { Some(x) } else { None }
     }
 
-    fn to_xt(self) -> Option<XT> {
+    pub fn to_xt(self) -> Option<XT> {
         if let WordKind::XT(x) = self.kind() { Some(x) } else { None }
     }
 
-    fn to_str(self) -> Option<ST> {
+    pub fn to_str(self) -> Option<ST> {
         if let WordKind::Str(x) = self.kind() { Some(x) } else { None }
     }
 }
@@ -190,7 +242,8 @@ impl std::fmt::Display for Word {
             WordKind::XT(XT(x))  => { formatter.write_fmt(format_args!("[xt] {}", x)) },
             WordKind::Str(st) => {
                 match st {
-                    ST::Allocated(off) => { formatter.write_fmt(format_args!("[str:alloc] {}", off)) },
+                    ST::Allocated(v) => {
+                        formatter.write_fmt(format_args!("[str:alloc] len={},addr={}", st.len(), st.addr())) },
                     ST::PadSpace(loc)  => { formatter.write_fmt(format_args!("[str:pad] len={},off={}", loc.len, loc.off)) },
                     ST::WordSpace(loc) => { formatter.write_fmt(format_args!("[str:word] len={},off={}", loc.len, loc.off)) },
                     ST::InputSpace(loc) => { formatter.write_fmt(format_args!("[str:input] len={},off={}", loc.len, loc.off)) },
@@ -206,22 +259,20 @@ impl std::fmt::Display for Word {
     }
 }
 
-/*
 #[derive(Clone,Copy)]
-struct PrimFunc(fn(&mut ToyForth, Word) -> Result<(),ForthError>);
+struct ForthFunc(fn(&mut ToyForth) -> Result<(),ForthError>);
 
-impl PartialEq for PrimFunc {
-    fn eq(&self, other: &PrimFunc) -> bool {
+impl PartialEq for ForthFunc {
+    fn eq(&self, other: &ForthFunc) -> bool {
         return (self.0 as usize) == (other.0 as usize)
     }
 }
 
-impl Eq for PrimFunc { }
-*/
+impl Eq for ForthFunc { }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum Primitive {
-    Stop,
+    Bye,
     Push(Word),
     Drop,
     Dup,
@@ -231,8 +282,9 @@ enum Primitive {
     Lookup,
     DefStr,
     DefWord,
-    Word,
-    Char,
+    Func(u32),
+    // ToNumber,
+    // Immediate,
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -254,18 +306,25 @@ struct DictEntry {
 }
 
 impl DictEntry {
-    const BUILTIN : u32 = 0x0000_0001;
+    const PRIMITIVE : u32 = 0x0000_0001;
+    const IMMEDIATE : u32 = 0x0000_0002;
 
-    pub fn is_builtin(&self) -> bool {
-        (self.flags & DictEntry::BUILTIN) != 0
+    pub fn is_primitive(&self) -> bool {
+        (self.flags & DictEntry::PRIMITIVE) != 0
+    }
+
+    pub fn is_immediate(&self) -> bool {
+        (self.flags & DictEntry::IMMEDIATE) != 0
     }
 }
 
 struct ToyForth {
     dstack: Vec<Word>,
     rstack: Vec<Word>,
+    ufuncs: Vec<ForthFunc>,
 
     dict: Vec<DictEntry>,
+    data: Vec<Word>,
     strings: std::vec::Vec<u8>,
     code: Vec<Instr>,
 
@@ -558,11 +617,9 @@ const MATH_SLASH : u8 = 3;
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum ForthError {
-    Stop,
-
-    StringNotFound,
     StackUnderflow,
     ReturnStackUnderflow,
+
     InvalidOperation,
     InvalidArgument,
     DivisionByZero,
@@ -572,11 +629,22 @@ enum ForthError {
     InvalidEmptyString,
     StringTooLong,
     StringOffsetTooLarge,
+
+    FunctionSpaceOverflow,
+    CellSpaceOverflow,
+    StringSpaceOverflow,
+
+    Unimplemented,
+
+    StringNotFound,
+    WordNotFound(ST),
+
     InvalidCell(XT),
     InvalidExecutionToken(Word),
     InvalidString(ST),
     InvalidStringValue(u32),
     InvalidDelimiter(i32),
+    InvalidFunction(u32),
 }
 
 impl ToyForth {
@@ -584,7 +652,10 @@ impl ToyForth {
         let mut tf = ToyForth{
             dstack:  std::vec::Vec::new(),
             rstack:  std::vec::Vec::new(),
+            ufuncs:  std::vec::Vec::new(),
+
             dict:    std::vec::Vec::new(),
+            data:    std::vec::Vec::new(),
             strings: std::vec::Vec::new(),
             code:    std::vec::Vec::new(),
 
@@ -595,30 +666,71 @@ impl ToyForth {
             input_off: 0,
         };
 
+        // First word in dict (addr 0) always holds BYE
+        tf.push_cell(Instr::Prim(Primitive::Bye));
+
         // set up standard dictionary
-        tf.add_word("STOP", &[Instr::Prim(Primitive::Stop)]);
-        /*
-        tf.add_word("CHAR", &[Instr::Prim(PRIM_BI_CHAR, Word::int(0))]);
+        tf.add_prim("BYE", Primitive::Bye);
+        tf.add_prim("DUP", Primitive::Dup);
+        tf.add_prim("DROP", Primitive::Drop);
+        tf.add_prim("SWAP", Primitive::Swap);
+        tf.add_prim("BL", Primitive::Push(Word::int(' ' as i32)));
+        tf.add_prim("CR", Primitive::Push(Word::int('\n' as i32)));
 
-        tf.add_word("BL", &[
-            Instr::Prim(Primitive::Push(Word::int(' ' as i32))),
-            Instr::Prim(Primitive::Stop),
-        ]);
+        tf.add_func("CHAR", ToyForth::builtin_char);
+        tf.add_func("WORD", ToyForth::builtin_word);
 
-        tf.add_word("CR", &[
-            Instr::Prim(PRIM_PUSH, Word::int('\n' as i32)),
-            Instr::Prim(PRIM_STOP, Word(0)),
-        ]);
-
-        // tf.add_word("'", &[Instr::Prim(
-        // tf.push_cell(Instr::Prim(PRIM_STOP, Word::int(0)));
-        */
+        // tf.add_prim("IMMEDIATE", Primitive::Immediate);
+        // tf.add_prim(">NUMBER", Primitive::ToNumber);
 
         eprintln!("Cell size is {}", std::mem::size_of::<Instr>());
         eprintln!("Prim size is {}", std::mem::size_of::<Primitive>());
         eprintln!("Word size is {}", std::mem::size_of::<Word>());
 
         return tf;
+    }
+
+    pub fn print_stacks(&self, msg: &str) {
+        eprintln!(">>> {}: ",msg);
+        for (i,w) in self.dstack.iter().enumerate() {
+            eprintln!("[D {:3}] {:?}", i,w.kind());
+        }
+        for (i,w) in self.rstack.iter().enumerate() {
+            eprintln!("[R {:3}] {:?}", i,w);
+        }
+        eprintln!("done\n");
+    }
+
+    pub fn interpret(&mut self, s: &str) -> Result<(), ForthError> {
+        // initial interpret is dumb...
+
+        self.input.clear();
+        self.input_off = 0;
+        self.input.push_str(s);
+
+        loop {
+            self.push_int(' ' as i32)?;
+            self.builtin_word()?;
+            self.print_stacks("after WORD");
+            self.builtin_find()?;
+            self.print_stacks("after FIND");
+            if self.pop_int()? == 0 {
+                let st = self.pop_str()?;
+                if self.str_len(st) == 0 {
+                    break;
+                }
+
+                return Err(ForthError::WordNotFound(st));
+            }
+
+            let xt = self.pop_xt()?;
+            self.print_stacks("after xt");
+            self.ret_push_bye()?;
+            self.exec(xt)?;
+            self.print_stacks("after exec");
+        }
+
+        Ok(())
     }
 
     pub fn here(&self) -> u32 {
@@ -639,6 +751,59 @@ impl ToyForth {
 
     pub fn code_size(&self) -> u32 {
         return self.code.len() as u32;
+    }
+
+    pub fn str_len(&self, st: ST) -> usize {
+        match st {
+            ST::Allocated(addr) => {
+                if addr as usize >= self.strings.len() {
+                    panic!("allocated string index exceeds string pool");
+                }
+
+                self.strings[addr as usize] as usize
+            },
+            ST::PadSpace(loc) | ST::WordSpace(loc) | ST::InputSpace(loc) => {
+                loc.len as usize
+            },
+        }
+    }
+
+    // should only be called internally during dictionary bootstrap
+    fn add_prim(&mut self, word: &str, prim: Primitive) -> XT {
+        self.add_primitive(word,prim).unwrap()
+    }
+
+    pub fn add_primitive(&mut self, word: &str, prim: Primitive) -> Result<XT,ForthError> {
+        let st = self.push_string(word)?;
+
+        let xt = self.mark_cell();
+        self.push_cell(Instr::Prim(prim));
+        self.push_cell(Instr::Unnest);
+
+        self.dict.push(DictEntry{
+            st: st,
+            xt: xt,
+            flags: DictEntry::PRIMITIVE,
+        });
+
+        Ok(xt)
+    }
+
+    fn add_func(&mut self, word: &str, func: fn (&mut ToyForth) -> Result<(),ForthError>) -> XT {
+        self.add_function(word,func).unwrap()
+    }
+
+    pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth) -> Result<(),ForthError>) -> Result<XT,ForthError> {
+        let st = self.push_string(word)?;
+        let func_ind = self.ufuncs.len();
+
+        if func_ind > 0xffff_ffff {
+            return Err(ForthError::FunctionSpaceOverflow);
+        }
+
+        self.ufuncs.push(ForthFunc(func));
+        let xt = self.add_primitive(word, Primitive::Func(func_ind as u32))?;
+        Ok(xt)
     }
 
     pub fn add_word(&mut self, word: &str, code: &[Instr]) -> Result<XT,ForthError> {
@@ -749,17 +914,19 @@ impl ToyForth {
         }
 
         let blen = b.len() as u8;
-        let ind = strings.len();
+        let off = strings.len();
 
-        if ind > ST::MAX as usize {
+        // FIXME: check string size!
+        if off > ST::MAX as usize {
             // XXX: handle with panic?
             panic!("allocation exceeds forth maximum string pool size");
         }
 
-        strings.push(blen);
+        // strings.push(blen);
         strings.extend_from_slice(b);
+        strings.push(0);
 
-        return Ok(ST::allocated_space(ind as u32))
+        return Ok(ST::allocated_space(off as u32, blen))
     }
 
     pub fn push_string(&mut self, s: &str) -> Result<ST,ForthError> {
@@ -768,16 +935,16 @@ impl ToyForth {
 
     pub fn bytes_at(&self, st: ST) -> &[u8] {
         match st {
-            ST::Allocated(off) => {
-                let ind  = off as usize;
-                let ind0 = (ind+1) as usize;
+            ST::Allocated(val) => {
+                let len = (val&0xff) as usize;
+                let off = (val >> 8) as usize;
 
-                if ind0 >= self.strings.len() {
+                if off >= self.strings.len() {
                     panic!("invalid string token");
                 }
 
-                let blen = self.strings[ind] as usize;
-                let ind1 = ind0+blen;
+                let ind0 = off;
+                let ind1 = off + len;
 
                 if ind1 > self.strings.len() {
                     panic!("invalid allocated string token");
@@ -809,7 +976,7 @@ impl ToyForth {
                 let i0 = loc.off as usize;
                 let i1 = (loc.off + loc.len) as usize;
 
-                if i0 >= self.input.len() || i1 > self.input.len() {
+                if i0 > self.input.len() || i1 > self.input.len() {
                     panic!("invalid input string token");
                 }
 
@@ -873,12 +1040,12 @@ impl ToyForth {
 
         if let (Some(WordKind::Int(b)), Some(WordKind::Int(a))) = (op1,op2) {
             match op {
-                MATH_PLUS  => { self.push(Word::int(a+b)); },
-                MATH_MINUS => { self.push(Word::int(a-b)); },
-                MATH_STAR  => { self.push(Word::int(a*b)); },
+                MATH_PLUS  => { self.push(Word::int(a+b))?; },
+                MATH_MINUS => { self.push(Word::int(a-b))?; },
+                MATH_STAR  => { self.push(Word::int(a*b))?; },
                 MATH_SLASH => {
                     if b != 0 {
-                        self.push(Word::int(a/b));
+                        self.push(Word::int(a/b))?;
                     } else {
                         return Err(ForthError::DivisionByZero);
                     }
@@ -894,17 +1061,13 @@ impl ToyForth {
         }
     }
 
-    fn stop(&mut self, _: Word) -> Result<(), ForthError> {
-        Err(ForthError::Stop)
-    }
-
     fn input_eol(&mut self) -> Result<(), ForthError> {
         let ilen = self.input.len();
         if ilen > Word::INT_MAX as usize {
             return Err(ForthError::NumberOutOfRange);
         }
 
-        self.push(Word::int(ilen as i32));
+        self.push(Word::int(ilen as i32))?;
         Ok(())
     }
 
@@ -914,13 +1077,13 @@ impl ToyForth {
 
         match self.lookup_word(s) {
             Ok(xt) => {
-                self.push(Word::from_xt(xt));
-                self.push(Word::int(1));
+                self.push(Word::from_xt(xt))?;
+                self.push(Word::int(1))?;
                 Ok(())
             },
             Err(ForthError::StringNotFound) => {
-                self.push(st.to_word());
-                self.push(Word::int(0));
+                self.push(st.to_word())?;
+                self.push(Word::int(0))?;
                 Ok(())
             },
             Err(err) => {
@@ -929,17 +1092,90 @@ impl ToyForth {
         }
     }
 
-    fn lookup_stop(&self) -> Result<XT,ForthError> {
-        // stop always at word 0.
+    fn builtin_to_number(&mut self) -> Result<(), ForthError> {
+        let base : u32 = 10; // FIXME!
+
+        let arg_len = self.pop_int()?;
+        eprintln!("arg_len = {}",arg_len);
+
+        if arg_len < 0 {
+            return Err(ForthError::InvalidArgument);
+        }
+
+        let st  = self.pop_str()?;
+        eprintln!("st = {:?}",st);
+        let v0 = self.pop_int()?;
+        eprintln!("v0 = {:?}",v0);
+
+        if v0 < 0 {
+            return Err(ForthError::InvalidArgument);
+        }
+
+        let bytes = self.bytes_at(st);
+        let len = std::cmp::min(arg_len as usize, bytes.len());
+
+        eprintln!("bytes = {:?}, len = {}, arg_len = {}, bytes.len() = {}",
+            bytes,len, arg_len, bytes.len());
+
+        let mut val = v0 as u32;
+
+        let mut consumed : u32 = 0;
+        for (i,dig) in bytes[..len].iter().enumerate() {
+            eprintln!("[{:3}] dig = {}", i, dig);
+            let ch = (*dig as char).to_ascii_lowercase();
+
+            let dig_val : i32 = 
+                if ch >= '0' && ch <= '9' {
+                    let delta = (ch as u8) - ('0' as u8);
+                    delta as i32
+                } else if ch >= 'a' && ch <= 'z' {
+                    let delta = (ch as u8) - ('a' as u8);
+                    (delta as i32) + 10
+                } else {
+                    -1
+                };
+
+            if dig_val < 0 || dig_val >= (base as i32) {
+                break;
+            }
+
+            // TODO: check for u32 overflow!
+            val = val * base + (dig_val as u32);
+            consumed += 1;
+        }
+
+        if consumed > 0xff {
+            return Err(ForthError::StringTooLong);
+        }
+
+        eprintln!("val = {}, st = {:?}, consumed = {}", val, st.offset(consumed as u8), consumed);
+
+        // TODO: check for word overflow!
+        self.push_int(val as i32)?;
+        self.push(st.offset(consumed as u8).to_word())?;
+        self.push_int(consumed as i32)?;
+
+        Ok(())
+    }
+
+    fn lookup_bye(&self) -> Result<XT,ForthError> {
+        // BYE always at word 0.
         Ok(XT(0))
+    }
+
+    fn ret_push_bye(&mut self) -> Result<(),ForthError> {
+        let bye_xt = self.lookup_bye()?;
+        self.rstack.push(bye_xt.to_word());
+        Ok(())
+    }
+
+    fn builtin_immediate(&mut self) -> Result<(),ForthError> {
+        Err(ForthError::Unimplemented)
     }
 
     fn builtin_execute(&mut self) -> Result<(),ForthError> {
         let xt = self.pop_xt()?;
-        let stop_xt = self.lookup_stop()?;
-
-        self.rstack.push(stop_xt.to_word());
-
+        self.ret_push_bye()?;
         self.exec(xt)
     }
 
@@ -951,7 +1187,7 @@ impl ToyForth {
         let s = &self.input[i0 as usize..i1 as usize];
         match self.lookup_word(s) {
             Ok(xt) => {
-                self.push(Word::from_xt(xt));
+                self.push(Word::from_xt(xt))?;
                 Ok(())
             },
             Err(err) => {
@@ -968,7 +1204,7 @@ impl ToyForth {
         let s = &self.input[i0 as usize..i1 as usize];
         match ToyForth::push_str(&mut self.strings, s) {
             Ok(st) => {
-                self.push(Word::from_str(st));
+                self.push(Word::from_str(st))?;
                 Ok(())
             },
             Err(err) => {
@@ -978,21 +1214,16 @@ impl ToyForth {
     }
 
     fn defword(&mut self) -> Result<(), ForthError> {
-        let arg0 = self.pop_kind();
-        let arg1 = self.pop_kind();
+        let xt = self.pop_xt()?;
+        let st = self.pop_str()?;
 
-        if let (Some(WordKind::XT(xt)),Some(WordKind::Str(st))) = (arg0,arg1) {
-            self.dict.push(DictEntry{
-                st: st,
-                xt: xt,
-                flags: 0,
-            });
+        self.dict.push(DictEntry{
+            st: st,
+            xt: xt,
+            flags: 0,
+        });
 
-            Ok(())
-        } else {
-            eprintln!("invalid args: [ {:?}, {:?} ]", arg0, arg1);
-            Err(ForthError::InvalidArgument)
-        }
+        Ok(())
     }
 
     fn pop_delim(&mut self) -> Result<u8, ForthError> {
@@ -1041,7 +1272,7 @@ impl ToyForth {
 
         let len = end - off;
         if end > off {
-            self.push_int(self.input.as_bytes()[off] as i32);
+            self.push_int(self.input.as_bytes()[off] as i32)?;
             Ok(())
         } else {
             Err(ForthError::InvalidEmptyString)
@@ -1070,7 +1301,7 @@ impl ToyForth {
             return Err(ForthError::StringTooLong);
         }
 
-        self.push(ST::input_space(off as u8,len as u8).to_word());
+        self.push(ST::input_space(off as u8,len as u8).to_word())?;
         Ok(())
     }
 
@@ -1119,7 +1350,6 @@ impl ToyForth {
         // TODO: bounds check
 
         let mut pc = xt.0;
-        let mut stop = false;
 
         loop {
             let op = &self.code[pc as usize];
@@ -1129,7 +1359,7 @@ impl ToyForth {
                 Instr::Empty | Instr::Special() | Instr::Data(_) => {
                     return Err(ForthError::InvalidCell(XT(pc)));
                 },
-                Instr::Prim(Primitive::Stop) => {
+                Instr::Prim(Primitive::Bye) => {
                     return Ok(());
                 },
                 Instr::Prim(Primitive::Push(w)) => {
@@ -1148,7 +1378,7 @@ impl ToyForth {
                     self.swap()?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::Math{op:op}) => {
+                Instr::Prim(Primitive::Math{op}) => {
                     self.math(*op)?;
                     pc += 1;
                 },
@@ -1168,12 +1398,16 @@ impl ToyForth {
                     self.defword()?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::Word) => {
-                    self.builtin_word()?;
-                    pc += 1;
-                },
-                Instr::Prim(Primitive::Char) => {
-                    self.builtin_char()?;
+
+                Instr::Prim(Primitive::Func(x)) => {
+                    let ind = *x as usize;
+                    if ind >= self.ufuncs.len() {
+                        return Err(ForthError::InvalidFunction(*x));
+                    }
+
+                    let fxn = self.ufuncs[ind].0;
+
+                    fxn(self)?;
                     pc += 1;
                 },
 
@@ -1192,8 +1426,6 @@ impl ToyForth {
                     pc = ret.0;
                 },
             }
-
-            eprintln!("stop = {}", stop);
         }
     }
 
@@ -1223,20 +1455,6 @@ impl ToyForth {
         return Ok(());
     }
 }
-
-/*
-const PRIM_PUSH    : PrimFunc = PrimFunc(ToyForth::push);
-const PRIM_DROP    : PrimFunc = PrimFunc(ToyForth::drop);
-const PRIM_SWAP    : PrimFunc = PrimFunc(ToyForth::swap);
-const PRIM_MATH    : PrimFunc = PrimFunc(ToyForth::math);
-const PRIM_STOP    : PrimFunc = PrimFunc(ToyForth::stop);
-const PRIM_EOL     : PrimFunc = PrimFunc(ToyForth::input_eol);
-const PRIM_LOOKUP  : PrimFunc = PrimFunc(ToyForth::input_lookup);
-const PRIM_DEFSTR  : PrimFunc = PrimFunc(ToyForth::defstr);
-const PRIM_DEFWORD : PrimFunc = PrimFunc(ToyForth::defword);
-const PRIM_BI_WORD : PrimFunc = PrimFunc(ToyForth::builtin_word);  // built-in WORD, for bootstrapping
-const PRIM_BI_CHAR : PrimFunc = PrimFunc(ToyForth::builtin_char);  // built-in WORD, for bootstrapping
-*/
 
 /*
 impl std::fmt::Debug for PrimFunc {
@@ -1382,7 +1600,7 @@ mod tests {
 
         assert_eq!(Word::xt(123).to_xt().unwrap(), XT(123));
 
-        assert_eq!(Word::str(123).to_str().unwrap(), ST::allocated_space(123));
+        assert_eq!(Word::str(((123 as u32)<<8) | 10).to_str().unwrap(), ST::allocated_space(123, 10));
 
         assert_eq!(Word::xt(123).to_int(), None);
         assert_eq!(Word::xt(123).to_str(), None);
@@ -1400,19 +1618,19 @@ mod tests {
     #[test]
     fn stack_prims() {
         let mut forth = ToyForth::new();
-        forth.push(Word::int( 123));
-        forth.push(Word::int(-123));
+        forth.push(Word::int( 123)).unwrap();
+        forth.push(Word::int(-123)).unwrap();
         assert_eq!(forth.pop().unwrap(), Word::int(-123));
         assert_eq!(forth.pop().unwrap(), Word::int( 123));
 
-        forth.push(Word::int( 123));
-        forth.push(Word::int(-123));
-        forth.swap();
+        forth.push(Word::int( 123)).unwrap();
+        forth.push(Word::int(-123)).unwrap();
+        forth.swap().unwrap();
         assert_eq!(forth.pop().unwrap(), Word::int( 123));
         assert_eq!(forth.pop().unwrap(), Word::int(-123));
 
-        forth.push(Word::int( 123));
-        forth.dup();
+        forth.push(Word::int( 123)).unwrap();
+        forth.dup().unwrap();
         assert_eq!(forth.pop().unwrap(), Word::int(123));
         assert_eq!(forth.pop().unwrap(), Word::int(123));
     }
@@ -1436,8 +1654,8 @@ mod tests {
         assert_eq!(forth.string_at(st1), "string1");
         assert_eq!(forth.string_at(st2), "string2");
 
-        assert_eq!(ST::Allocated(base+0), st1);
-        assert_eq!(ST::Allocated(base+8), st2);
+        assert_eq!(ST::allocated_space(base+0, 7), st1);
+        assert_eq!(ST::allocated_space(base+8, 7), st2);
 
         assert_eq!(st1.to_word().kind(), WordKind::Str(st1));
         assert_eq!(st2.to_word().kind(), WordKind::Str(st2));
@@ -1453,7 +1671,7 @@ mod tests {
             Instr::Prim(Primitive::Push(Word::int(-999))),
             Instr::Prim(Primitive::Swap),
             Instr::Prim(Primitive::Drop),
-            Instr::Prim(Primitive::Stop),
+            Instr::Prim(Primitive::Bye),
         ];
 
         let xt = forth.add_code(&code);
@@ -1474,7 +1692,7 @@ mod tests {
             Instr::Prim(Primitive::Math{op:MATH_PLUS}),
             Instr::Prim(Primitive::Push(Word::int(-10))),
             Instr::Prim(Primitive::Math{op:MATH_STAR}),
-            Instr::Prim(Primitive::Stop),
+            Instr::Prim(Primitive::Bye),
         ];
 
         let xt = forth.add_code(&code);
@@ -1502,10 +1720,10 @@ mod tests {
         let xt1 = forth.add_code(&vec![
             Instr::Prim(Primitive::Push(Word::int(2))),
             Instr::DoCol(xt0),
-            Instr::Prim(Primitive::Stop),
+            Instr::Prim(Primitive::Bye),
         ]);
 
-        forth.exec(xt1);
+        forth.exec(xt1).unwrap();
         assert_eq!(forth.pop().unwrap(), Word::int(5));
         assert_eq!(forth.pop(), None);
     }
@@ -1553,10 +1771,10 @@ mod tests {
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(0))));
         forth.push_cell(Instr::Prim(Primitive::EOL));
         forth.push_cell(Instr::Prim(Primitive::Lookup));
-        forth.push_cell(Instr::Prim(Primitive::Stop));
+        forth.push_cell(Instr::Prim(Primitive::Bye));
 
         forth.input.push_str("my_func");
-        forth.exec(immed);
+        forth.exec(immed).unwrap();
 
         assert_eq!(forth.pop().unwrap(), Word::from_xt(xt));
         assert_eq!(forth.pop(), None);
@@ -1584,7 +1802,7 @@ mod tests {
             forth.push_cell(Instr::Prim(Primitive::DefStr));
             forth.push_cell(Instr::Prim(Primitive::Push(Word::from_xt(xt))));
             forth.push_cell(Instr::Prim(Primitive::DefWord));
-            forth.push_cell(Instr::Prim(Primitive::Stop));
+            forth.push_cell(Instr::Prim(Primitive::Bye));
 
             forth.exec(immed).unwrap();
         }
@@ -1595,7 +1813,7 @@ mod tests {
             forth.push_cell(Instr::Prim(Primitive::Push(Word::int(0))));
             forth.push_cell(Instr::Prim(Primitive::EOL));
             forth.push_cell(Instr::Prim(Primitive::Lookup));
-            forth.push_cell(Instr::Prim(Primitive::Stop));
+            forth.push_cell(Instr::Prim(Primitive::Bye));
 
             forth.exec(immed).unwrap();
         }
@@ -1611,27 +1829,27 @@ mod tests {
         forth.input.push_str("  x  test foo bar   ");
         forth.input_off = 0;
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 3);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(2,1)));
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 9);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(5,4)));
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 13);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(10,3)));
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 17);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(14,3)));
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
@@ -1639,7 +1857,7 @@ mod tests {
         assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_word());
 
         // make sure we can search again and it's well behaved...
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
@@ -1688,27 +1906,27 @@ mod tests {
         forth.input.push_str("  x  test foo bar   ");
         forth.input_off = 0;
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 3);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(2,1)));
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 9);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(5,4)));
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 13);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(10,3)));
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 17);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(14,3)));
 
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
@@ -1716,7 +1934,7 @@ mod tests {
         assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_word());
 
         // make sure we can search again and it's well behaved...
-        forth.push_int(' ' as i32);
+        forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
@@ -1738,7 +1956,7 @@ mod tests {
 
         // look up various things
         let st = forth.pad_str("test").unwrap();
-        forth.push(st.to_word());
+        forth.push(st.to_word()).unwrap();
         eprintln!("stack top: {:?}", forth.peek());
         forth.builtin_find().unwrap();
 
@@ -1746,7 +1964,7 @@ mod tests {
         assert_eq!(forth.pop_kind().unwrap(), WordKind::Str(st));
 
         let st = forth.pad_str("my_func").unwrap();
-        forth.push(st.to_word());
+        forth.push(st.to_word()).unwrap();
         eprintln!("stack top: {:?}", forth.peek());
         forth.builtin_find().unwrap();
 
@@ -1766,10 +1984,10 @@ mod tests {
            Instr::Unnest,
         ]).unwrap();
 
-        forth.push_int(1234);
+        forth.push_int(1234).unwrap();
 
         let st = forth.pad_str("my_func").unwrap();
-        forth.push(st.to_word());
+        forth.push(st.to_word()).unwrap();
         eprintln!("stack top: {:?}", forth.peek());
         forth.builtin_find().unwrap();
 
@@ -1777,5 +1995,60 @@ mod tests {
         forth.builtin_execute().unwrap();
         assert_eq!(forth.pop_int().unwrap(), 2469);
     }
+
+    #[test]
+    fn can_define_user_func() {
+        let mut forth = ToyForth::new();
+
+        let xt = forth.add_function("my_func", |forth: &mut ToyForth| -> Result<(),ForthError> {
+            forth.push_int(123)?;
+            Ok(())
+        }).unwrap();
+
+        forth.interpret("my_func").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 123);
+    }
+
+    #[test]
+    fn can_interpret_two_words() {
+        let mut forth = ToyForth::new();
+
+        forth.add_primitive("ONE", Primitive::Push(Word::int(1))).unwrap();
+        forth.add_primitive("TWO", Primitive::Push(Word::int(2))).unwrap();
+
+        forth.interpret("ONE DUP").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+    }
+
+    #[test]
+    fn builtin_to_number() {
+        let mut forth = ToyForth::new();
+
+        forth.push_int(0).unwrap();
+        let st = forth.push_string("123").unwrap();
+        forth.push(Word::from_str(st)).unwrap();
+        forth.push_int(3).unwrap();
+        forth.builtin_to_number().unwrap();
+
+        assert_eq!(forth.stack_depth(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop_str().unwrap(), st.offset(3));
+        assert_eq!(forth.pop_int().unwrap(), 123);
+
+        forth.push_int(0).unwrap();
+        let st = forth.push_string("54a3").unwrap();
+        forth.push(Word::from_str(st)).unwrap();
+        forth.push_int(4).unwrap();
+        forth.builtin_to_number().unwrap();
+
+        assert_eq!(forth.stack_depth(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+        assert_eq!(forth.pop_str().unwrap(), st.offset(2));
+        assert_eq!(forth.pop_int().unwrap(), 54);
+    }
+
 }
 
