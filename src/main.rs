@@ -243,7 +243,7 @@ impl std::fmt::Display for Word {
             WordKind::Str(st) => {
                 match st {
                     ST::Allocated(v) => {
-                        formatter.write_fmt(format_args!("[str:alloc] len={},addr={}", st.len(), st.addr())) },
+                        formatter.write_fmt(format_args!("[str:alloc] @ {} len={},addr={}", v, st.len(), st.addr())) },
                     ST::PadSpace(loc)  => { formatter.write_fmt(format_args!("[str:pad] len={},off={}", loc.len, loc.off)) },
                     ST::WordSpace(loc) => { formatter.write_fmt(format_args!("[str:word] len={},off={}", loc.len, loc.off)) },
                     ST::InputSpace(loc) => { formatter.write_fmt(format_args!("[str:input] len={},off={}", loc.len, loc.off)) },
@@ -741,7 +741,7 @@ impl ToyForth {
                     return Err(ForthError::WordNotFound(st));
                 }
 
-                self.drop();
+                self.drop()?;
 
                 /*
                 return Err(ForthError::WordNotFound(st));
@@ -776,21 +776,6 @@ impl ToyForth {
 
     pub fn code_size(&self) -> u32 {
         return self.code.len() as u32;
-    }
-
-    pub fn str_len(&self, st: ST) -> usize {
-        match st {
-            ST::Allocated(addr) => {
-                if addr as usize >= self.strings.len() {
-                    panic!("allocated string index exceeds string pool");
-                }
-
-                self.strings[addr as usize] as usize
-            },
-            ST::PadSpace(loc) | ST::WordSpace(loc) | ST::InputSpace(loc) => {
-                loc.len as usize
-            },
-        }
     }
 
     // should only be called internally during dictionary bootstrap
@@ -1145,7 +1130,7 @@ impl ToyForth {
         let mut val = v0 as u32;
 
         let mut consumed : u32 = 0;
-        for (i,dig) in bytes[..len].iter().enumerate() {
+        for (_i,dig) in bytes[..len].iter().enumerate() {
             eprintln!("[{:3}] dig = {}", i, dig);
             let ch = (*dig as char).to_ascii_lowercase();
 
@@ -1271,7 +1256,7 @@ impl ToyForth {
 
     fn scan_delim(bytes: &[u8], delim: u8, expect: bool) -> usize {
         bytes.iter().enumerate().find(
-            |(i,ch)| (**ch == delim) == expect
+            |(_loc,ch)| (**ch == delim) == expect
         ).map_or(bytes.len(), |(loc,_)| loc as usize)
     }
 
@@ -1295,7 +1280,6 @@ impl ToyForth {
 
         self.input_off = end;
 
-        let len = end - off;
         if end > off {
             self.push_int(self.input.as_bytes()[off] as i32)?;
             Ok(())
@@ -1377,7 +1361,7 @@ impl ToyForth {
         let mut pc = xt.0;
 
         loop {
-            let op = &self.code[pc as usize];
+            let op = self.code[pc as usize];
             eprintln!("pc = {}, code[pc] = {:?}", pc, op);
             match op {
                 // Instr::Empty | Instr::Special() | Instr::Char{..} | Instr::Data(_) => {
@@ -1388,7 +1372,7 @@ impl ToyForth {
                     return Ok(());
                 },
                 Instr::Prim(Primitive::Push(w)) => {
-                    self.push(*w)?;
+                    self.push(w)?;
                     pc += 1;
                 },
                 Instr::Prim(Primitive::Drop) => {
@@ -1404,7 +1388,7 @@ impl ToyForth {
                     pc += 1;
                 },
                 Instr::Prim(Primitive::Math{op}) => {
-                    self.math(*op)?;
+                    self.math(op)?;
                     pc += 1;
                 },
                 Instr::Prim(Primitive::EOL) => {
@@ -1425,9 +1409,9 @@ impl ToyForth {
                 },
 
                 Instr::Prim(Primitive::Func(x)) => {
-                    let ind = *x as usize;
+                    let ind = x as usize;
                     if ind >= self.ufuncs.len() {
-                        return Err(ForthError::InvalidFunction(*x));
+                        return Err(ForthError::InvalidFunction(x));
                     }
 
                     let fxn = self.ufuncs[ind].0;
@@ -1456,14 +1440,14 @@ impl ToyForth {
 
     fn process_token(&mut self, tok: LexToken) -> Result<(), String> {
         println!("token: {} source: {}", tok.token, tok.source);
-        if let Token::Ident(id) = tok.token {
+        if let Token::Ident(_id) = tok.token {
             /*
             match self.lookup_ident(id) {
                 Builtin(fxn) => {
             }
             */
         } else {
-            let data = Data::from_token(tok)?;
+            let _data = Data::from_token(tok)?;
             // self.data_stack.push(data);
         }
         Ok(())
@@ -1512,7 +1496,7 @@ impl std::fmt::Display for Token {
     }
 }
 
-fn repl(prompt: &str, r: &mut std::io::BufRead, w: &mut std::io::Write) -> std::io::Result<()> {
+fn repl(prompt: &str, r: &mut dyn std::io::BufRead, w: &mut dyn std::io::Write) -> std::io::Result<()> {
     let mut line = String::new();
 
     let mut forth = ToyForth::new();
@@ -1664,7 +1648,7 @@ mod tests {
     fn can_allocate_entries() {
         let mut forth = ToyForth::new();
 
-        let (xt,entries) = forth.allocate_cells(4);
+        let (_xt,entries) = forth.allocate_cells(4);
         assert_eq!(entries.len(), 4);
     }
 
@@ -1786,7 +1770,7 @@ mod tests {
         forth.push_cell(Instr::Prim(Primitive::Math{op:MATH_PLUS}));
         forth.push_cell(Instr::Unnest);
 
-        let st = forth.define_word("my_func", xt).unwrap();
+        forth.define_word("my_func", xt).unwrap();
 
         let lookup_xt = forth.lookup_word("my_func").unwrap();
         assert_eq!(xt, lookup_xt);
@@ -2001,7 +1985,7 @@ mod tests {
     fn can_execute_token() {
         let mut forth = ToyForth::new();
 
-        let xt = forth.add_word("my_func", &vec![
+        forth.add_word("my_func", &vec![
            Instr::Prim(Primitive::Push(Word::int(2))),
            Instr::Prim(Primitive::Math{op:MATH_STAR}),
            Instr::Prim(Primitive::Push(Word::int(1))),
@@ -2025,7 +2009,7 @@ mod tests {
     fn can_define_user_func() {
         let mut forth = ToyForth::new();
 
-        let xt = forth.add_function("my_func", |forth: &mut ToyForth| -> Result<(),ForthError> {
+        forth.add_function("my_func", |forth: &mut ToyForth| -> Result<(),ForthError> {
             forth.push_int(123)?;
             Ok(())
         }).unwrap();
