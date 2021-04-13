@@ -701,7 +701,7 @@ impl ToyForth {
         eprintln!("done\n");
     }
 
-    pub fn interpret(&mut self, s: &str) -> Result<(), ForthError> {
+    pub fn builtin_interpret(&mut self, s: &str) -> Result<(), ForthError> {
         // initial interpret is dumb...
 
         self.input.clear();
@@ -714,20 +714,40 @@ impl ToyForth {
             self.print_stacks("after WORD");
             self.builtin_find()?;
             self.print_stacks("after FIND");
+
             if self.pop_int()? == 0 {
                 let st = self.pop_str()?;
-                if self.str_len(st) == 0 {
+                eprintln!("st = {:?}", st);
+                let len = st.len();
+
+                if len == 0 {
                     break;
                 }
 
-                return Err(ForthError::WordNotFound(st));
-            }
+                self.push_int(0)?;
+                self.push(st.to_word())?;
+                self.push_int(len as i32)?;
 
-            let xt = self.pop_xt()?;
-            self.print_stacks("after xt");
-            self.ret_push_bye()?;
-            self.exec(xt)?;
-            self.print_stacks("after exec");
+                self.builtin_to_number()?;
+
+                let consumed = self.pop_int()?;
+
+                if consumed < (len as i32) {
+                    return Err(ForthError::WordNotFound(st));
+                }
+
+                self.drop();
+
+                /*
+                return Err(ForthError::WordNotFound(st));
+                */
+            } else {
+                let xt = self.pop_xt()?;
+                self.print_stacks("after xt");
+                self.ret_push_bye()?;
+                self.exec(xt)?;
+                self.print_stacks("after exec");
+            }
         }
 
         Ok(())
@@ -2005,7 +2025,7 @@ mod tests {
             Ok(())
         }).unwrap();
 
-        forth.interpret("my_func").unwrap();
+        forth.builtin_interpret("my_func").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 123);
     }
@@ -2017,7 +2037,7 @@ mod tests {
         forth.add_primitive("ONE", Primitive::Push(Word::int(1))).unwrap();
         forth.add_primitive("TWO", Primitive::Push(Word::int(2))).unwrap();
 
-        forth.interpret("ONE DUP").unwrap();
+        forth.builtin_interpret("ONE DUP").unwrap();
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), 1);
         assert_eq!(forth.pop_int().unwrap(), 1);
@@ -2048,6 +2068,16 @@ mod tests {
         assert_eq!(forth.pop_int().unwrap(), 2);
         assert_eq!(forth.pop_str().unwrap(), st.offset(2));
         assert_eq!(forth.pop_int().unwrap(), 54);
+    }
+
+    #[test]
+    fn can_interpret_numbers() {
+        let mut forth = ToyForth::new();
+
+        forth.builtin_interpret("1 2").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 1);
     }
 
 }
