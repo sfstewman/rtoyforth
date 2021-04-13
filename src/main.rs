@@ -615,7 +615,7 @@ const MATH_MINUS : u8 = 1;
 const MATH_STAR  : u8 = 2;
 const MATH_SLASH : u8 = 3;
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+#[derive(Debug)]
 enum ForthError {
     StackUnderflow,
     ReturnStackUnderflow,
@@ -645,6 +645,14 @@ enum ForthError {
     InvalidStringValue(u32),
     InvalidDelimiter(i32),
     InvalidFunction(u32),
+
+    IOError(std::io::Error),
+}
+
+impl std::convert::From<std::io::Error> for ForthError {
+    fn from(err: std::io::Error) -> Self {
+        ForthError::IOError(err)
+    }
 }
 
 impl ToyForth {
@@ -1898,12 +1906,12 @@ mod tests {
         assert_eq!(forth.pop_int().unwrap(), 'b' as i32);
 
         // out of words, make sure this is an error!
-        assert_eq!(forth.builtin_char().unwrap_err(), ForthError::InvalidEmptyString);
+        assert!(matches!(forth.builtin_char().unwrap_err(), ForthError::InvalidEmptyString));
         assert_eq!(forth.input_off, 20);
         assert_eq!(forth.stack_depth(), 0);
 
         // make sure we can search again and it's well behaved...
-        assert_eq!(forth.builtin_char().unwrap_err(), ForthError::InvalidEmptyString);
+        assert!(matches!(forth.builtin_char().unwrap_err(), ForthError::InvalidEmptyString));
         assert_eq!(forth.input_off, 20);
         assert_eq!(forth.stack_depth(), 0);
     }
