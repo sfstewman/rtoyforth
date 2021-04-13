@@ -735,13 +735,13 @@ impl<'tf> ToyForth<'tf> {
         loop {
             self.push_int(' ' as i32)?;
             self.builtin_word()?;
-            self.print_stacks("after WORD");
+            // self.print_stacks("after WORD");
             self.builtin_find()?;
-            self.print_stacks("after FIND");
+            // self.print_stacks("after FIND");
 
             if self.pop_int()? == 0 {
                 let st = self.pop_str()?;
-                eprintln!("st = {:?}", st);
+                // eprintln!("st = {:?}", st);
                 let len = st.len();
 
                 if len == 0 {
@@ -767,10 +767,10 @@ impl<'tf> ToyForth<'tf> {
                 */
             } else {
                 let xt = self.pop_xt()?;
-                self.print_stacks("after xt");
+                // self.print_stacks("after xt");
                 self.ret_push_bye()?;
                 self.exec(xt)?;
-                self.print_stacks("after exec");
+                // self.print_stacks("after exec");
             }
         }
 
@@ -1211,16 +1211,16 @@ impl<'tf> ToyForth<'tf> {
         let base : u32 = 10; // FIXME!
 
         let arg_len = self.pop_int()?;
-        eprintln!("arg_len = {}",arg_len);
+        // eprintln!("arg_len = {}",arg_len);
 
         if arg_len < 0 {
             return Err(ForthError::InvalidArgument);
         }
 
         let st  = self.pop_str()?;
-        eprintln!("st = {:?}",st);
+        // eprintln!("st = {:?}",st);
         let v0 = self.pop_int()?;
-        eprintln!("v0 = {:?}",v0);
+        // eprintln!("v0 = {:?}",v0);
 
         if v0 < 0 {
             return Err(ForthError::InvalidArgument);
@@ -1229,14 +1229,14 @@ impl<'tf> ToyForth<'tf> {
         let bytes = self.bytes_at(st);
         let len = std::cmp::min(arg_len as usize, bytes.len());
 
-        eprintln!("bytes = {:?}, len = {}, arg_len = {}, bytes.len() = {}",
-            bytes,len, arg_len, bytes.len());
+        // eprintln!("bytes = {:?}, len = {}, arg_len = {}, bytes.len() = {}",
+        //     bytes,len, arg_len, bytes.len());
 
         let mut val = v0 as u32;
 
         let mut consumed : u32 = 0;
         for (_i,dig) in bytes[..len].iter().enumerate() {
-            eprintln!("[{:3}] dig = {}", i, dig);
+            // eprintln!("[{:3}] dig = {}", i, dig);
             let ch = (*dig as char).to_ascii_lowercase();
 
             let dig_val : i32 = 
@@ -1263,7 +1263,7 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::StringTooLong);
         }
 
-        eprintln!("val = {}, st = {:?}, consumed = {}", val, st.offset(consumed as u8), consumed);
+        // eprintln!("val = {}, st = {:?}, consumed = {}", val, st.offset(consumed as u8), consumed);
 
         // TODO: check for word overflow!
         self.push_int(val as i32)?;
@@ -1479,7 +1479,7 @@ impl<'tf> ToyForth<'tf> {
 
         loop {
             let op = self.code[pc as usize];
-            eprintln!("pc = {}, code[pc] = {:?}", pc, op);
+            // eprintln!("pc = {}, code[pc] = {:?}", pc, op);
             match op {
                 // Instr::Empty | Instr::Special() | Instr::Char{..} | Instr::Data(_) => {
                 Instr::Empty | Instr::Special() | Instr::Data(_) => {
