@@ -688,20 +688,22 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("DUP", Primitive::Dup);
         tf.add_prim("DROP", Primitive::Drop);
         tf.add_prim("SWAP", Primitive::Swap);
-        tf.add_prim("BL", Primitive::Push(Word::int(' ' as i32)));
-        tf.add_prim("CR", Primitive::Push(Word::int('\n' as i32)));
 
         tf.add_prim("+", Primitive::Math{op:MATH_PLUS});
         tf.add_prim("-", Primitive::Math{op:MATH_MINUS});
         tf.add_prim("*", Primitive::Math{op:MATH_STAR});
         tf.add_prim("/", Primitive::Math{op:MATH_SLASH});
 
+        // words that may be replaced with Forth definitions at some point
+        tf.add_prim("BL", Primitive::Push(Word::int(' ' as i32)));
+        tf.add_prim("CR", Primitive::Push(Word::int('\n' as i32)));
         tf.add_func("CHAR", ToyForth::builtin_char);
         tf.add_func("WORD", ToyForth::builtin_word);
         tf.add_func(".", ToyForth::builtin_dot);
+        tf.add_func(">NUMBER", ToyForth::builtin_to_number);
+
 
         // tf.add_prim("IMMEDIATE", Primitive::Immediate);
-        // tf.add_prim(">NUMBER", Primitive::ToNumber);
 
         eprintln!("Cell size is {}", std::mem::size_of::<Instr>());
         eprintln!("Prim size is {}", std::mem::size_of::<Primitive>());
