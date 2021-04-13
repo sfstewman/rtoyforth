@@ -677,6 +677,11 @@ impl ToyForth {
         tf.add_prim("BL", Primitive::Push(Word::int(' ' as i32)));
         tf.add_prim("CR", Primitive::Push(Word::int('\n' as i32)));
 
+        tf.add_prim("+", Primitive::Math{op:MATH_PLUS});
+        tf.add_prim("-", Primitive::Math{op:MATH_MINUS});
+        tf.add_prim("*", Primitive::Math{op:MATH_STAR});
+        tf.add_prim("/", Primitive::Math{op:MATH_SLASH});
+
         tf.add_func("CHAR", ToyForth::builtin_char);
         tf.add_func("WORD", ToyForth::builtin_word);
 
@@ -2078,6 +2083,10 @@ mod tests {
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), 2);
         assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.builtin_interpret("1 2 +").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 3);
     }
 
 }
