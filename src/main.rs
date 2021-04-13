@@ -260,15 +260,15 @@ impl std::fmt::Display for Word {
 }
 
 #[derive(Clone,Copy)]
-struct ForthFunc(fn(&mut ToyForth) -> Result<(),ForthError>);
+struct ForthFunc<'tf>(fn(&mut ToyForth<'tf>) -> Result<(),ForthError>);
 
-impl PartialEq for ForthFunc {
+impl<'tf> PartialEq for ForthFunc<'tf> {
     fn eq(&self, other: &ForthFunc) -> bool {
         return (self.0 as usize) == (other.0 as usize)
     }
 }
 
-impl Eq for ForthFunc { }
+impl<'tf> Eq for ForthFunc<'tf> { }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum Primitive {
@@ -318,10 +318,10 @@ impl DictEntry {
     }
 }
 
-struct ToyForth {
+struct ToyForth<'tf> {
     dstack: Vec<Word>,
     rstack: Vec<Word>,
-    ufuncs: Vec<ForthFunc>,
+    ufuncs: Vec<ForthFunc<'tf>>,
 
     dict: Vec<DictEntry>,
     data: Vec<Word>,
@@ -333,6 +333,9 @@ struct ToyForth {
 
     input: String,
     input_off: usize,
+
+    in_stream: Option<&'tf mut dyn std::io::BufRead>,
+    out_stream: Option<&'tf mut dyn std::io::Write>,
 }
 
 #[derive(Debug,PartialEq)]
@@ -655,8 +658,8 @@ impl std::convert::From<std::io::Error> for ForthError {
     }
 }
 
-impl ToyForth {
-    pub fn new() -> ToyForth {
+impl<'tf> ToyForth<'tf> {
+    pub fn new() -> ToyForth<'tf> {
         let mut tf = ToyForth{
             dstack:  std::vec::Vec::new(),
             rstack:  std::vec::Vec::new(),
@@ -672,6 +675,9 @@ impl ToyForth {
 
             input: std::string::String::new(),
             input_off: 0,
+
+            in_stream: None,
+            out_stream: None,
         };
 
         // First word in dict (addr 0) always holds BYE
@@ -692,6 +698,7 @@ impl ToyForth {
 
         tf.add_func("CHAR", ToyForth::builtin_char);
         tf.add_func("WORD", ToyForth::builtin_word);
+        tf.add_func(".", ToyForth::builtin_dot);
 
         // tf.add_prim("IMMEDIATE", Primitive::Immediate);
         // tf.add_prim(">NUMBER", Primitive::ToNumber);
@@ -770,6 +777,92 @@ impl ToyForth {
         Ok(())
     }
 
+    fn refill(r: &mut dyn std::io::BufRead, s: &mut String) -> Result<(), ForthError> {
+        r.read_line(s)?;
+        if let Some(ch) = s.pop() {
+            if ch != '\n' {
+                s.push(ch);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn builtin_refill(&mut self) -> Result<(), ForthError> {
+        self.input_off = 0;
+        self.input.clear();
+
+        if let Some(inp) = &mut self.in_stream {
+            return ToyForth::refill(inp, &mut self.input);
+        }
+
+        return Ok(());
+    }
+
+    pub fn write_prompt(&mut self, prompt: &str) -> Result<(), ForthError> {
+        if let Some(w) = &mut self.out_stream {
+            write!(w, "{}\n", prompt);
+            w.flush()?;
+        }
+
+        Ok(())
+    }
+
+    pub fn std_repl() -> Result<(),ForthError> {
+        let prompt = "ok";
+
+        let stdin = std::io::stdin();
+        let stdout = std::io::stdout();
+
+        let mut in_handle = stdin.lock();
+        let mut out_handle = stdout.lock();
+
+        let mut forth = ToyForth::new();
+
+        forth.repl(prompt, &mut in_handle, &mut out_handle)
+    }
+
+    pub fn repl(&mut self, prompt: &str, r: &'tf mut dyn std::io::BufRead, w: &'tf mut dyn std::io::Write) -> Result<(),ForthError> {
+        // let mut line = String::new();
+
+        let old_in  = std::mem::replace(&mut self.in_stream, Some(r));
+        let old_out = std::mem::replace(&mut self.out_stream, Some(w));
+
+        // TODO:
+        //   1) Replace REPL loop with Forth code.  This should bootstrap the interpreter
+        //      and call QUIT.
+        //
+        //   2) Integrate IO into ToyForth.
+        //
+        //   3) Allow different input sources (eg: files)
+        //
+        loop {
+            self.write_prompt(prompt)?;
+            self.builtin_refill()?;
+
+            /*
+            line.clear();
+            r.read_line(&mut line)?;
+            // println!("line is: {}", line);
+            */
+
+            if self.input.is_empty() {
+                break
+            }
+
+            let ret = self.builtin_interpret();
+
+            if let Err(err) = ret {
+                println!("error: {:?}", err);
+            }
+        }
+
+        self.in_stream  = old_in;
+        self.out_stream = old_out;
+
+        return Ok(());
+    }
+
     pub fn here(&self) -> u32 {
         return self.code.len() as u32;
     }
@@ -811,11 +904,11 @@ impl ToyForth {
         Ok(xt)
     }
 
-    fn add_func(&mut self, word: &str, func: fn (&mut ToyForth) -> Result<(),ForthError>) -> XT {
+    fn add_func(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> XT {
         self.add_function(word,func).unwrap()
     }
 
-    pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth) -> Result<(),ForthError>) -> Result<XT,ForthError> {
+    pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<XT,ForthError> {
         let st = self.push_string(word)?;
         let func_ind = self.ufuncs.len();
 
@@ -1279,6 +1372,18 @@ impl ToyForth {
         return (i0,i0+i1);
     }
 
+    fn builtin_dot(&mut self) -> Result<(), ForthError> {
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+
+        if let Some(out) = &mut self.out_stream {
+            use std::io::Write;
+            write!(out, "{}\n", w)?;
+            out.flush()?;
+        }
+
+        Ok(())
+    }
+
     fn builtin_char(&mut self) -> Result<(), ForthError> {
         let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), ' ' as u8);
 
@@ -1536,14 +1641,10 @@ fn repl(prompt: &str, r: &mut dyn std::io::BufRead, w: &mut dyn std::io::Write) 
 }
 
 fn main() {
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-
-    let mut in_handle = stdin.lock();
-    let mut out_handle = stdout.lock();
-
-    if let Err(err) = repl("ok\n", &mut in_handle, &mut out_handle) {
-        println!("Error encountered: {}", err);
+    let ret = ToyForth::std_repl();
+    if let Err(err) = ret {
+        // FIXME: replace {:?} with a proper formatter
+        println!("Error encountered: {:?}", err);
     }
 }
 
