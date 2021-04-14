@@ -716,6 +716,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func(">R", ToyForth::builtin_data_to_ret);
         tf.add_func("R>", ToyForth::builtin_ret_to_data);
 
+        tf.add_func("CONSTANT", ToyForth::builtin_constant);
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
 
@@ -1467,6 +1468,25 @@ impl<'tf> ToyForth<'tf> {
             write!(out, "{}\n", w)?;
             out.flush()?;
         }
+
+        Ok(())
+    }
+
+    fn builtin_constant(&mut self) -> Result<(), ForthError> {
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+
+        self.push_int(' ' as i32)?;
+        self.builtin_parse()?;
+
+        let len = self.pop_int()?;
+        let st = self.pop_str()?;
+        if len == 0 {
+            return Err(ForthError::InvalidEmptyString);
+        }
+
+        // FIXME: completely unnecessary copy here...
+        let s = self.maybe_string_at(st)?.to_string();
+        self.add_word(&s, &[ Instr::Prim(Primitive::Push(w)), Instr::Unnest ])?;
 
         Ok(())
     }
@@ -2470,5 +2490,17 @@ mod tests {
         assert_eq!(forth.pop_int().unwrap(), 3);
         assert_eq!(forth.pop_int().unwrap(), 1);
     }
+
+    #[test]
+    fn builtin_constant() {
+        let mut forth = ToyForth::new();
+        forth.interpret("123 CONSTANT X123").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("X123");
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 123);
+    }
+
 }
 
