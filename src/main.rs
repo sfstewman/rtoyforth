@@ -638,7 +638,7 @@ enum ForthError {
     CellSpaceOverflow,
     StringSpaceOverflow,
 
-    Unimplemented,
+    NotImplemented,
 
     StringNotFound,
     WordNotFound(ST),
@@ -1387,7 +1387,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_immediate(&mut self) -> Result<(),ForthError> {
-        Err(ForthError::Unimplemented)
+        Err(ForthError::NotImplemented)
     }
 
     fn builtin_execute(&mut self) -> Result<(),ForthError> {
