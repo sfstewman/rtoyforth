@@ -1596,8 +1596,6 @@ impl<'tf> ToyForth<'tf> {
         let word_end = self.input_off+w1;
 
         let len = word_end - word_off;
-        let off = word_off;
-
         if len >= 255 {
             return Err(ForthError::StringTooLong);
         }
@@ -2357,8 +2355,6 @@ mod tests {
         {
             forth.push_int(' ' as i32).unwrap();
             forth.builtin_word().unwrap();
-            let st = forth.peek_str().unwrap();
-
             forth.builtin_find().unwrap();
 
             assert_eq!(forth.pop_int().unwrap(), 1);
