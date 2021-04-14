@@ -277,6 +277,7 @@ enum Primitive {
     Drop,
     Dup,
     Swap,
+    Over,
     Math{op:u8},
     EOL,
     Lookup,
@@ -645,6 +646,7 @@ enum ForthError {
     InvalidCell(XT),
     InvalidExecutionToken(Word),
     InvalidString(ST),
+    InvalidCountedString(ST),
     InvalidStringValue(u32),
     InvalidDelimiter(i32),
     InvalidFunction(u32),
@@ -688,6 +690,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("DUP", Primitive::Dup);
         tf.add_prim("DROP", Primitive::Drop);
         tf.add_prim("SWAP", Primitive::Swap);
+        tf.add_prim("OVER", Primitive::Over);
 
         tf.add_prim("+", Primitive::Math{op:MATH_PLUS});
         tf.add_prim("-", Primitive::Math{op:MATH_MINUS});
@@ -699,11 +702,18 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("CR", Primitive::Push(Word::int('\n' as i32)));
         tf.add_func("CHAR", ToyForth::builtin_char);
         tf.add_func("WORD", ToyForth::builtin_word);
+        tf.add_func("C@", ToyForth::builtin_char_at);
+        tf.add_func("CHAR+", ToyForth::builtin_char_plus);
+        tf.add_func("PARSE", ToyForth::builtin_parse);
         tf.add_func(".", ToyForth::builtin_dot);
+        tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
+
+        tf.add_func("FIND", ToyForth::builtin_find);
+
         tf.add_func(">NUMBER", ToyForth::builtin_to_number);
 
+        // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
-        // tf.add_prim("IMMEDIATE", Primitive::Immediate);
 
         eprintln!("Cell size is {}", std::mem::size_of::<Instr>());
         eprintln!("Prim size is {}", std::mem::size_of::<Primitive>());
@@ -726,10 +736,7 @@ impl<'tf> ToyForth<'tf> {
     pub fn interpret(&mut self, s: &str) -> Result<(), ForthError> {
         // initial interpret is dumb...
 
-        self.input.clear();
-        self.input_off = 0;
-        self.input.push_str(s);
-
+        self.set_input(s);
         self.builtin_interpret()
     }
 
@@ -737,23 +744,48 @@ impl<'tf> ToyForth<'tf> {
         loop {
             self.push_int(' ' as i32)?;
             self.builtin_word()?;
-            // self.print_stacks("after WORD");
+            /*
+            self.print_stacks("after WORD");
+            {
+                let st = self.peek_str().unwrap();
+                eprintln!("counted string = {}", self.counted_string_at(st));
+            }
+            */
             self.builtin_find()?;
             // self.print_stacks("after FIND");
 
-            if self.pop_int()? == 0 {
-                let st = self.pop_str()?;
-                // eprintln!("st = {:?}", st);
-                let len = st.len();
+            if self.pop_int()? == 0 {       // ( caddr 0 -- caddr )
+                self.push_int(0)?;          // ( caddr -- caddr 0 )
+                self.swap();                // ( caddr 0 -- 0 caddr )
+
+                self.dup()?;                // ( 0 caddr -- 0 caddr caddr )
+                self.builtin_char_plus()?;  // ( 0 caddr caddr -- 0 caddr caddr+1 )
+
+                self.dup()?;                // ( 0 caddr caddr+1 -- 0 caddr caddr+1 caddr+1 )
+                // self.print_stacks("--1--");
+                let st = self.pop_str()?;   // ( 0 caddr caddr+1 caddr+1 -- 0 caddr caddr+1 )
+
+                self.swap();                // ( 0 caddr caddr+1 -- 0 caddr+1 caddr )
+                self.builtin_char_at()?;    // ( 0 caddr+1 caddr -- 0 caddr+1 u )
+
+                self.dup()?;                // ( 0 caddr+1 u -- 0 caddr+1 u u )
+                let len = self.pop_int()?;  // ( 0 caddr+1 u u -- 0 caddr+1 u )
 
                 if len == 0 {
+                    self.drop()?;
+                    self.drop()?;
+                    self.drop()?;
+                    // self.print_stacks("--X--");
                     break;
                 }
 
+                /*
                 self.push_int(0)?;
                 self.push(st.to_word())?;
                 self.push_int(len as i32)?;
+                */
 
+                // self.print_stacks("--2--");
                 self.builtin_to_number()?;
 
                 let consumed = self.pop_int()?;
@@ -761,6 +793,8 @@ impl<'tf> ToyForth<'tf> {
                 if consumed < (len as i32) {
                     return Err(ForthError::WordNotFound(st));
                 }
+
+                // self.print_stacks("--3--");
 
                 self.drop()?;
 
@@ -803,7 +837,7 @@ impl<'tf> ToyForth<'tf> {
 
     pub fn write_prompt(&mut self, prompt: &str) -> Result<(), ForthError> {
         if let Some(w) = &mut self.out_stream {
-            write!(w, "{}\n", prompt);
+            write!(w, "{}\n", prompt)?;
             w.flush()?;
         }
 
@@ -1000,6 +1034,12 @@ impl<'tf> ToyForth<'tf> {
         return xt;
     }
 
+    fn set_input(&mut self, s: &str) {
+        self.input.clear();
+        self.input.push_str(s);
+        self.input_off = 0;
+    }
+
     fn set_tmp_str(dest: &mut [u8;256], src: &str) -> Result<u8, ForthError> {
         let b = src.as_bytes();
         let blen = b.len();
@@ -1102,12 +1142,30 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    pub fn maybe_counted_string_at(&self, st: ST) -> Result<&str, ForthError> {
+        let b = self.bytes_at(st);
+
+        // eprintln!("bytes = {:?}", b);
+        // eprintln!("word_space = {:?}", self.word);
+
+        let len = b[0] as usize;
+        if len >= b.len() {
+            return Err(ForthError::InvalidCountedString(st));
+        }
+
+        return std::str::from_utf8(&b[1..(len+1)]).map_err(|_| ForthError::InvalidCountedString(st));
+    }
+
+    pub fn counted_string_at(&self, st: ST) -> &str {
+        self.maybe_counted_string_at(st).unwrap()
+    }
+
     pub fn maybe_string_at(&self, st: ST) -> Result<&str, ForthError> {
         return std::str::from_utf8(self.bytes_at(st)).map_err(|_| ForthError::InvalidString(st));
     }
 
     pub fn string_at(&self, st: ST) -> &str {
-        return std::str::from_utf8(self.bytes_at(st)).unwrap();
+        self.maybe_string_at(st).unwrap()
     }
 
     pub fn push(&mut self, w: Word) -> Result<(), ForthError> {
@@ -1137,6 +1195,16 @@ impl<'tf> ToyForth<'tf> {
         let len = self.dstack.len();
         if len >= 2 {
             self.dstack[..].swap(len-2,len-1);
+            Ok(())
+        } else {
+            Err(ForthError::StackUnderflow)
+        }
+    }
+
+    fn over(&mut self) -> Result<(), ForthError> {
+        let len = self.dstack.len();
+        if len >= 2 {
+            self.dstack.push(self.dstack[len-2]);
             Ok(())
         } else {
             Err(ForthError::StackUnderflow)
@@ -1190,7 +1258,7 @@ impl<'tf> ToyForth<'tf> {
 
     fn builtin_find(&mut self) -> Result<(), ForthError> {
         let st = self.pop_str()?;
-        let s = self.maybe_string_at(st)?;
+        let s = self.maybe_counted_string_at(st)?;
 
         match self.lookup_word(s) {
             Ok(xt) => {
@@ -1200,6 +1268,35 @@ impl<'tf> ToyForth<'tf> {
             },
             Err(ForthError::StringNotFound) => {
                 self.push(st.to_word())?;
+                self.push(Word::int(0))?;
+                Ok(())
+            },
+            Err(err) => {
+                Err(err)
+            }
+        }
+    }
+
+    fn builtin_find_name(&mut self) -> Result<(), ForthError> {
+        let len = self.pop_int()?;
+        if len < 0 {
+            return Err(ForthError::NumberOutOfRange);
+        }
+
+        let st = self.pop_str()?;
+        let s = {
+            let s0 = self.maybe_string_at(st)?;
+            let l = len as usize;
+            if s0.len() <= l { &s0 } else { &s0[..l] }
+        };
+
+        match self.lookup_word(s) {
+            Ok(xt) => {
+                self.push(Word::from_xt(xt))?;
+                self.push(Word::int(1))?;
+                Ok(())
+            },
+            Err(ForthError::StringNotFound) => {
                 self.push(Word::int(0))?;
                 Ok(())
             },
@@ -1407,7 +1504,45 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    fn builtin_char_at(&mut self) -> Result<(), ForthError> {
+        let st = self.pop_str()?;
+        self.push_int(self.bytes_at(st)[0] as i32)?;
+        Ok(())
+    }
+
+    fn builtin_char_plus(&mut self) -> Result<(), ForthError> {
+        let st = self.pop_str()?;
+        self.push(st.offset(1).to_word())?;
+        Ok(())
+    }
+
     fn builtin_word(&mut self) -> Result<(), ForthError> {
+        let delim = self.pop_delim()?;
+
+        let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), delim);
+
+        let word_off = self.input_off+w0;
+        let word_end = self.input_off+w1;
+
+        let len = word_end - word_off;
+        let off = word_off;
+
+        if len >= 255 {
+            return Err(ForthError::StringTooLong);
+        }
+
+        self.input_off = word_end;
+
+        let wstr : &mut [u8] = &mut self.word[..];
+        wstr[0] = len as u8;
+        wstr[1..(len+1)].copy_from_slice(&self.input.as_bytes()[word_off..word_end]);
+
+        // self.push(ST::input_space(off as u8,len as u8).to_word())?;
+        self.push(ST::word_space(0, (len+1) as u8).to_word())?;
+        Ok(())
+    }
+
+    fn builtin_parse(&mut self) -> Result<(), ForthError> {
         let delim = self.pop_delim()?;
 
         let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), delim);
@@ -1430,6 +1565,7 @@ impl<'tf> ToyForth<'tf> {
         }
 
         self.push(ST::input_space(off as u8,len as u8).to_word())?;
+        self.push_int(len as i32)?;
         Ok(())
     }
 
@@ -1439,8 +1575,27 @@ impl<'tf> ToyForth<'tf> {
     }
 
     // nb: pop is only called from rust, so it's not a forth primitive
-    pub fn peek(&mut self) -> Option<Word> {
+    pub fn peek(&self) -> Option<Word> {
         self.dstack.last().map(|x| *x)
+    }
+
+    pub fn peek_kind(&self) -> Option<WordKind> {
+        self.peek().map(Word::kind)
+    }
+
+    // nb: pop is only called from rust, so it's not a forth primitive
+    pub fn peek_str(&self) -> Result<ST, ForthError> {
+        match self.peek_kind() {
+            Some(WordKind::Str(st)) => {
+                Ok(st)
+            },
+            Some(_) => {
+                Err(ForthError::InvalidArgument)
+            },
+            None => {
+                Err(ForthError::StackUnderflow)
+            }
+        }
     }
 
     fn pop_int(&mut self) -> Result<i32, ForthError> {
@@ -1504,6 +1659,10 @@ impl<'tf> ToyForth<'tf> {
                 },
                 Instr::Prim(Primitive::Swap) => {
                     self.swap()?;
+                    pc += 1;
+                },
+                Instr::Prim(Primitive::Over) => {
+                    self.over()?;
                     pc += 1;
                 },
                 Instr::Prim(Primitive::Math{op}) => {
@@ -1956,29 +2115,34 @@ mod tests {
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 3);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(2,1)));
+        assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "x");
+        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,2)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 9);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(5,4)));
+        assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "test");
+        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,5)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 13);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(10,3)));
+        assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "foo");
+        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,4)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 17);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(14,3)));
+        assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "bar");
+        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,4)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
         eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
-        assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_word());
+        assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "");
+        assert_eq!(forth.pop().unwrap(), ST::word_space(0,1).to_word());
 
         // make sure we can search again and it's well behaved...
         forth.push_int(' ' as i32).unwrap();
@@ -1986,6 +2150,76 @@ mod tests {
         assert_eq!(forth.input_off, 20);
         let pk = forth.peek().unwrap();
         eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
+        assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "");
+        assert_eq!(forth.pop().unwrap(), ST::word_space(0,1).to_word());
+    }
+
+    #[test]
+    fn builtin_char_at_and_char_plus() {
+        let mut forth = ToyForth::new();
+
+        forth.set_input("  xtest  ");
+
+        forth.push_int(' ' as i32).unwrap();
+        forth.builtin_word().unwrap();
+        assert_eq!(forth.input_off, 7);
+        assert_eq!(forth.bytes_at(forth.peek_str().unwrap()), &vec![5 as u8, 'x' as u8, 't' as u8, 'e' as u8, 's' as u8, 't' as u8]);
+        assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "xtest");
+
+        forth.dup().unwrap();
+        forth.builtin_char_at().unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 5 as i32);
+
+        forth.builtin_char_plus().unwrap();
+        assert_eq!(forth.bytes_at(forth.peek_str().unwrap()), &vec!['x' as u8, 't' as u8, 'e' as u8, 's' as u8, 't' as u8]);
+        forth.builtin_char_at().unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 'x' as i32);
+
+        assert_eq!(forth.stack_depth(), 0);
+    }
+
+    #[test]
+    fn builtin_parse_scans_words() {
+        let mut forth = ToyForth::new();
+
+        forth.input.push_str("  x  test foo bar   ");
+        forth.input_off = 0;
+
+        forth.push_int(' ' as i32).unwrap();
+        forth.builtin_parse().unwrap();
+        assert_eq!(forth.input_off, 3);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(2,1)));
+
+        forth.push_int(' ' as i32).unwrap();
+        forth.builtin_parse().unwrap();
+        assert_eq!(forth.input_off, 9);
+        assert_eq!(forth.pop_int().unwrap(), 4);
+        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(5,4)));
+
+        forth.push_int(' ' as i32).unwrap();
+        forth.builtin_parse().unwrap();
+        assert_eq!(forth.input_off, 13);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(10,3)));
+
+        forth.push_int(' ' as i32).unwrap();
+        forth.builtin_parse().unwrap();
+        assert_eq!(forth.input_off, 17);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(14,3)));
+
+        forth.push_int(' ' as i32).unwrap();
+        forth.builtin_parse().unwrap();
+        assert_eq!(forth.input_off, 20);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_word());
+
+        // make sure we can search again and it's well behaved...
+        forth.push_int(' ' as i32).unwrap();
+        forth.builtin_parse().unwrap();
+        assert_eq!(forth.input_off, 20);
+        assert_eq!(forth.pop_int().unwrap(), 0);
         assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_word());
     }
 
@@ -2024,49 +2258,6 @@ mod tests {
     }
 
     #[test]
-    fn builtin_find_finds_words() {
-        let mut forth = ToyForth::new();
-
-        forth.input.push_str("  x  test foo bar   ");
-        forth.input_off = 0;
-
-        forth.push_int(' ' as i32).unwrap();
-        forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 3);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(2,1)));
-
-        forth.push_int(' ' as i32).unwrap();
-        forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 9);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(5,4)));
-
-        forth.push_int(' ' as i32).unwrap();
-        forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 13);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(10,3)));
-
-        forth.push_int(' ' as i32).unwrap();
-        forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 17);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(14,3)));
-
-        forth.push_int(' ' as i32).unwrap();
-        forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 20);
-        let pk = forth.peek().unwrap();
-        eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
-        assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_word());
-
-        // make sure we can search again and it's well behaved...
-        forth.push_int(' ' as i32).unwrap();
-        forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 20);
-        let pk = forth.peek().unwrap();
-        eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
-        assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_word());
-    }
-
-    #[test]
     fn can_lookup_token() {
         let mut forth = ToyForth::new();
 
@@ -2079,21 +2270,81 @@ mod tests {
         ]).unwrap();
 
         // look up various things
-        let st = forth.pad_str("test").unwrap();
-        forth.push(st.to_word()).unwrap();
-        eprintln!("stack top: {:?}", forth.peek());
-        forth.builtin_find().unwrap();
+        forth.set_input("test");
+        {
+            forth.push_int(' ' as i32).unwrap();
+            forth.builtin_word().unwrap();
+            let st = forth.peek_str().unwrap();
 
-        assert_eq!(forth.pop_int().unwrap(), 0);
-        assert_eq!(forth.pop_kind().unwrap(), WordKind::Str(st));
+            forth.builtin_find().unwrap();
 
-        let st = forth.pad_str("my_func").unwrap();
-        forth.push(st.to_word()).unwrap();
-        eprintln!("stack top: {:?}", forth.peek());
-        forth.builtin_find().unwrap();
+            assert_eq!(forth.pop_int().unwrap(), 0);
+            assert_eq!(forth.pop_kind().unwrap(), WordKind::Str(st));
+        }
 
+        forth.set_input("my_func");
+        {
+            forth.push_int(' ' as i32).unwrap();
+            forth.builtin_word().unwrap();
+            let st = forth.peek_str().unwrap();
+
+            forth.builtin_find().unwrap();
+
+            assert_eq!(forth.pop_int().unwrap(), 1);
+            assert_eq!(forth.pop_kind().unwrap(), WordKind::XT(xt));
+        }
+    }
+
+    #[test]
+    fn builtin_over() {
+        let mut forth = ToyForth::new();
+
+        forth.push_int(1).unwrap();
+        forth.push_int(2).unwrap();
+        forth.over().unwrap();
         assert_eq!(forth.pop_int().unwrap(), 1);
-        assert_eq!(forth.pop_kind().unwrap(), WordKind::XT(xt));
+        assert_eq!(forth.pop_int().unwrap(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+    }
+
+    #[test]
+    fn builtin_find_name_looks_up_token() {
+        let mut forth = ToyForth::new();
+
+        let xt = forth.add_word("my_func", &vec![
+           Instr::Prim(Primitive::Push(Word::int(2))),
+           Instr::Prim(Primitive::Math{op:MATH_STAR}),
+           Instr::Prim(Primitive::Push(Word::int(1))),
+           Instr::Prim(Primitive::Math{op:MATH_PLUS}),
+           Instr::Unnest,
+        ]).unwrap();
+
+        // look up various things
+        forth.set_input("test");
+        {
+            forth.push_int(' ' as i32).unwrap();
+            forth.builtin_parse().unwrap();
+
+            forth.over().unwrap();
+            let st = forth.pop_str().unwrap();
+
+            forth.print_stacks("after parse");
+
+            forth.builtin_find_name().unwrap();
+
+            assert_eq!(forth.pop_int().unwrap(), 0);
+            assert_eq!(forth.stack_depth(), 0);
+        }
+
+        forth.set_input("my_func");
+        {
+            forth.push_int(' ' as i32).unwrap();
+            forth.builtin_parse().unwrap();
+            forth.builtin_find_name().unwrap();
+
+            assert_eq!(forth.pop_int().unwrap(), 1);
+            assert_eq!(forth.pop_kind().unwrap(), WordKind::XT(xt));
+        }
     }
 
     #[test]
@@ -2110,9 +2361,9 @@ mod tests {
 
         forth.push_int(1234).unwrap();
 
-        let st = forth.pad_str("my_func").unwrap();
-        forth.push(st.to_word()).unwrap();
-        eprintln!("stack top: {:?}", forth.peek());
+        forth.set_input("my_func");
+        forth.push_int(' ' as i32).unwrap();
+        forth.builtin_word().unwrap();
         forth.builtin_find().unwrap();
 
         assert_eq!(forth.pop_int().unwrap(), 1);
