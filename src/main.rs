@@ -747,70 +747,39 @@ impl<'tf> ToyForth<'tf> {
     pub fn builtin_interpret(&mut self) -> Result<(), ForthError> {
         loop {
             self.push_int(' ' as i32)?;
-            self.builtin_word()?;
-            /*
-            self.print_stacks("after WORD");
-            {
-                let st = self.peek_str().unwrap();
-                eprintln!("counted string = {}", self.counted_string_at(st));
-            }
-            */
-            self.builtin_find()?;
-            // self.print_stacks("after FIND");
+            self.builtin_parse()?;
+            self.builtin_find_name()?;
 
-            if self.pop_int()? == 0 {       // ( caddr 0 -- caddr )
-                self.push_int(0)?;          // ( caddr -- caddr 0 )
-                self.swap();                // ( caddr 0 -- 0 caddr )
-
-                self.dup()?;                // ( 0 caddr -- 0 caddr caddr )
-                self.builtin_char_plus()?;  // ( 0 caddr caddr -- 0 caddr caddr+1 )
-
-                self.dup()?;                // ( 0 caddr caddr+1 -- 0 caddr caddr+1 caddr+1 )
-                // self.print_stacks("--1--");
-                let st = self.pop_str()?;   // ( 0 caddr caddr+1 caddr+1 -- 0 caddr caddr+1 )
-
-                self.swap();                // ( 0 caddr caddr+1 -- 0 caddr+1 caddr )
-                self.builtin_char_at()?;    // ( 0 caddr+1 caddr -- 0 caddr+1 u )
-
-                self.dup()?;                // ( 0 caddr+1 u -- 0 caddr+1 u u )
-                let len = self.pop_int()?;  // ( 0 caddr+1 u u -- 0 caddr+1 u )
+            if self.pop_int()? == 0 {           // ( caddr u 0 -- caddr u )
+                self.dup()?;                    // ( caddr u -- caddr u u )
+                let len = self.pop_int()?;      // ( caddr u u -- caddr u )
 
                 if len == 0 {
-                    self.drop()?;
-                    self.drop()?;
-                    self.drop()?;
-                    // self.print_stacks("--X--");
+                    self.drop()?;               // ( caddr u -- caddr )
+                    self.drop()?;               // ( caddr -- )
                     break;
                 }
 
-                /*
-                self.push_int(0)?;
-                self.push(st.to_word())?;
-                self.push_int(len as i32)?;
-                */
+                self.builtin_data_to_ret()?;    // ( caddr u -- caddr )         r: ( -- u )
+                self.push_int(0)?;              // ( caddr -- caddr 0 )         r: ( u -- u )
+                self.swap();                    // ( caddr 0 -- 0 caddr )       r: ( u -- u )
+                self.builtin_ret_to_data()?;    // ( 0 caddr -- 0 caddr u )     r: ( u -- )
 
-                // self.print_stacks("--2--");
-                self.builtin_to_number()?;
+                self.builtin_to_number()?;      // ( 0 caddr u1 -- ud caddr u2 )
 
-                let consumed = self.pop_int()?;
+                let consumed = self.pop_int()?; // ( ud caddr u2 -- ud caddr )
 
                 if consumed < (len as i32) {
+                    let st = self.pop_str()?;   // ( ud caddr -- ud )
+                    self.drop()?;               // ( ud -- )
                     return Err(ForthError::WordNotFound(st));
                 }
 
-                // self.print_stacks("--3--");
-
-                self.drop()?;
-
-                /*
-                return Err(ForthError::WordNotFound(st));
-                */
+                self.drop()?;                   // ( ud caddr -- ud )
             } else {
                 let xt = self.pop_xt()?;
-                // self.print_stacks("after xt");
                 self.ret_push_bye()?;
                 self.exec(xt)?;
-                // self.print_stacks("after exec");
             }
         }
 
