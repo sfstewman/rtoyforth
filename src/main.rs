@@ -638,6 +638,8 @@ enum ForthError {
     CellSpaceOverflow,
     StringSpaceOverflow,
 
+    UnfinishedColonDefinition,
+
     NotImplemented,
 
     StringNotFound,
@@ -706,6 +708,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("CHAR+", ToyForth::builtin_char_plus);
         tf.add_func("PARSE", ToyForth::builtin_parse);
         tf.add_func(".", ToyForth::builtin_dot);
+        tf.add_func(":", ToyForth::builtin_colon);
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
         tf.add_func("FIND", ToyForth::builtin_find);
@@ -1488,6 +1491,66 @@ impl<'tf> ToyForth<'tf> {
         let s = self.maybe_string_at(st)?.to_string();
         self.add_word(&s, &[ Instr::Prim(Primitive::Push(w)), Instr::Unnest ])?;
 
+        Ok(())
+    }
+
+    fn builtin_colon(&mut self) -> Result<(), ForthError> {
+        self.push_int(' ' as i32)?;
+        self.builtin_parse()?;
+
+        let len = self.pop_int()?;
+        let st = self.pop_str()?;
+        if len == 0 {
+            return Err(ForthError::InvalidEmptyString);
+        }
+
+        // FIXME: completely unnecessary copy here...
+        let s = self.maybe_string_at(st)?.to_string();
+        let xt = self.mark_cell();
+
+        loop {
+            self.push_int(' ' as i32)?;
+            self.builtin_parse()?;
+            let wlen = self.pop_int()?;
+            let wst = self.pop_str()?;
+            let word = self.maybe_string_at(wst)?;
+
+            if wlen == 0 {
+                return Err(ForthError::UnfinishedColonDefinition);
+            }
+
+            if word == ";" {
+                break;
+            }
+
+            // TODO: lookup dict entry, check for primitive / immediate, etc.
+            match self.lookup_word(word) {
+                Ok(xt) => {
+                    self.push_cell(Instr::DoCol(xt));
+                },
+                Err(ForthError::StringNotFound) => {
+                    self.push_int(0)?;
+                    self.push(wst.to_word())?;
+                    self.push_int(wlen)?;
+                    self.builtin_to_number()?;          // ( 0 caddr u1 -- ud caddr u2 )
+                    let consumed = self.pop_int()?;     // ( ud caddr u2 -- ud caddr )
+                    self.drop();                        // ( ud caddr -- ud )
+                    if consumed < wlen {
+                        self.drop();                    // ( ud -- )
+                        return Err(ForthError::WordNotFound(wst));
+                    }
+
+                    let num = self.pop_int()?;
+                    self.push_cell(Instr::Prim(Primitive::Push(Word::int(num))));
+                },
+                Err(err) => {
+                    return Err(err);
+                }
+            }
+        }
+
+        self.push_cell(Instr::Unnest);
+        self.define_word(&s, xt)?;
         Ok(())
     }
 
@@ -2502,5 +2565,21 @@ mod tests {
         assert_eq!(forth.pop_int().unwrap(), 123);
     }
 
+    #[test]
+    fn can_colon_define_word() {
+        let mut forth = ToyForth::new();
+
+        /*
+        forth.interpret("2 CONSTANT TWO").unwrap();
+        forth.interpret("1 CONSTANT ONE").unwrap();
+        forth.interpret(": my_word TWO * ONE + ;").unwrap();
+        */
+        forth.interpret(": my_word 2 * 1 + ;").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("13 my_word").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 27);
+    }
 }
 
