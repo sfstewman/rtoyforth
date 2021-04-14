@@ -766,7 +766,7 @@ impl<'tf> ToyForth<'tf> {
 
                 self.builtin_data_to_ret()?;    // ( caddr u -- caddr )         r: ( -- u )
                 self.push_int(0)?;              // ( caddr -- caddr 0 )         r: ( u -- u )
-                self.swap();                    // ( caddr 0 -- 0 caddr )       r: ( u -- u )
+                self.swap()?;                   // ( caddr 0 -- 0 caddr )       r: ( u -- u )
                 self.builtin_ret_to_data()?;    // ( 0 caddr -- 0 caddr u )     r: ( u -- )
 
                 self.builtin_to_number()?;      // ( 0 caddr u1 -- ud caddr u2 )
@@ -1534,9 +1534,9 @@ impl<'tf> ToyForth<'tf> {
                     self.push_int(wlen)?;
                     self.builtin_to_number()?;          // ( 0 caddr u1 -- ud caddr u2 )
                     let consumed = self.pop_int()?;     // ( ud caddr u2 -- ud caddr )
-                    self.drop();                        // ( ud caddr -- ud )
+                    self.drop()?;                       // ( ud caddr -- ud )
                     if consumed < wlen {
-                        self.drop();                    // ( ud -- )
+                        self.drop()?;                   // ( ud -- )
                         return Err(ForthError::WordNotFound(wst));
                     }
 
