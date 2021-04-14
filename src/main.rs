@@ -712,6 +712,10 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func(">NUMBER", ToyForth::builtin_to_number);
 
+        // should these be prims?
+        tf.add_func(">R", ToyForth::builtin_data_to_ret);
+        tf.add_func("R>", ToyForth::builtin_ret_to_data);
+
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
 
@@ -1209,6 +1213,18 @@ impl<'tf> ToyForth<'tf> {
         } else {
             Err(ForthError::StackUnderflow)
         }
+    }
+
+    fn builtin_data_to_ret(&mut self) -> Result<(), ForthError> {
+        let w = self.dstack.pop().ok_or(ForthError::StackUnderflow)?;
+        self.rstack.push(w);
+        Ok(())
+    }
+
+    fn builtin_ret_to_data(&mut self) -> Result<(), ForthError> {
+        let w = self.rstack.pop().ok_or(ForthError::StackUnderflow)?;
+        self.dstack.push(w);
+        Ok(())
     }
 
     fn math(&mut self, op: u8) -> Result<(),ForthError> {
@@ -2453,5 +2469,37 @@ mod tests {
         assert_eq!(forth.pop_int().unwrap(), 3);
     }
 
+    #[test]
+    fn use_return_stack() {
+        let mut forth = ToyForth::new();
+
+        // handle underflow
+        assert!(matches!(forth.builtin_data_to_ret().unwrap_err(), ForthError::StackUnderflow));
+        assert!(matches!(forth.builtin_ret_to_data().unwrap_err(), ForthError::StackUnderflow));
+
+        forth.push_int(1).unwrap();
+        forth.push_int(2).unwrap();
+
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        forth.builtin_data_to_ret().unwrap();
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.rstack_depth(), 1);
+
+        assert_eq!(forth.dstack.last().map(|x| *x).unwrap(), Word::int(1));
+        assert_eq!(forth.rstack.last().map(|x| *x).unwrap(), Word::int(2));
+
+        forth.push_int(3).unwrap();
+        forth.builtin_ret_to_data().unwrap();
+
+        assert_eq!(forth.stack_depth(), 3);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        assert_eq!(forth.pop_int().unwrap(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+    }
 }
 
