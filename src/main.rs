@@ -2149,7 +2149,7 @@ mod tests {
         forth.interpret("123 CONSTANT X123").unwrap();
         assert_eq!(forth.stack_depth(), 0);
 
-        forth.interpret("X123");
+        forth.interpret("X123").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 123);
     }
