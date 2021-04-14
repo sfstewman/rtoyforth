@@ -1277,6 +1277,7 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    // (caddr u -- xt 1 | xt -1 | caddr u 0)
     fn builtin_find_name(&mut self) -> Result<(), ForthError> {
         let len = self.pop_int()?;
         if len < 0 {
@@ -1297,6 +1298,8 @@ impl<'tf> ToyForth<'tf> {
                 Ok(())
             },
             Err(ForthError::StringNotFound) => {
+                self.push(st.to_word())?;
+                self.push_int(len)?;
                 self.push(Word::int(0))?;
                 Ok(())
             },
@@ -2325,6 +2328,15 @@ mod tests {
             forth.push_int(' ' as i32).unwrap();
             forth.builtin_parse().unwrap();
 
+            let len = forth.pop_int().unwrap();
+            let st  = forth.pop_str().unwrap();
+
+            forth.push(st.to_word()).unwrap();
+            forth.push_int(len).unwrap();
+
+            assert_eq!(len, 4);
+            assert_eq!(forth.string_at(st), "test");
+
             forth.over().unwrap();
             let st = forth.pop_str().unwrap();
 
@@ -2333,6 +2345,8 @@ mod tests {
             forth.builtin_find_name().unwrap();
 
             assert_eq!(forth.pop_int().unwrap(), 0);
+            assert_eq!(forth.pop_int().unwrap(), len);
+            assert_eq!(forth.pop_str().unwrap(), st);
             assert_eq!(forth.stack_depth(), 0);
         }
 
