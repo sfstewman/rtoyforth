@@ -275,12 +275,6 @@ impl std::fmt::Display for Word {
                     ST::InputSpace(loc) => { formatter.write_fmt(format_args!("[str:input] len={},off={}", loc.len, loc.off)) },
                 }
             },
-            /*
-            WordKind::Scratch(scratch) => {
-                match scratch {
-                }
-            }
-            */
         }
     }
 }
@@ -310,7 +304,6 @@ enum Primitive {
     DefStr,
     DefWord,
     Func(u32),
-    // ToNumber,
     // Immediate,
 }
 
@@ -2322,11 +2315,6 @@ mod tests {
     fn can_colon_define_word() {
         let mut forth = ToyForth::new();
 
-        /*
-        forth.interpret("2 CONSTANT TWO").unwrap();
-        forth.interpret("1 CONSTANT ONE").unwrap();
-        forth.interpret(": my_word TWO * ONE + ;").unwrap();
-        */
         forth.interpret(": my_word 2 * 1 + ;").unwrap();
         assert_eq!(forth.stack_depth(), 0);
 
