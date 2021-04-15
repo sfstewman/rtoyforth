@@ -4,7 +4,7 @@ const WORD_HIGH_BIT : u32 = 0x8000_0000;
 const WORD_SIGN_BIT : u32 = 0x4000_0000;
 const WORD_INT_MASK : u32 = 0x7fff_ffff;
 
-const WORD_XT_MASK  : u32 = 0x3fff_ffff;
+const WORD_XT_MASK  : u32 = 0x1fff_ffff;
 const WORD_STR_MASK : u32 = 0x3fff_ffff;
 const WORD_XT_BITS  : u32 = WORD_HIGH_BIT | WORD_SIGN_BIT;
 const WORD_STR_BITS : u32 = WORD_HIGH_BIT;
@@ -16,13 +16,29 @@ struct Word(u32);
 struct XT(u32);
 
 impl XT {
-    const MAX : u32 = 0x3fff_ffff;
+    const MAX : u32 = 0x1fff_ffff;
     const MIN : u32 = 0;
-    const MASK : u32 = 0x3fff_ffff;
+    const MASK : u32 = 0x1fff_ffff;
     const BITS : u32 = Word::HIGH_BIT | Word::SIGN_BIT;
 
     fn to_word(self) -> Word {
         Word::xt(self.0)
+    }
+}
+
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+struct Addr(u32);
+
+impl Addr {
+    const MAX : u32 = 0x1fff_ffff;
+    const MIN : u32 = 0;
+    const MASK : u32 = 0x1fff_ffff;
+    const ADDR_BIT : u32 = 0x2000_0000;
+    const BITS : u32 = Word::HIGH_BIT | Word::SIGN_BIT | Addr::ADDR_BIT;
+
+    fn to_word(self) -> Word {
+        // XXX: check mask
+        Word(Addr::BITS | self.0)
     }
 }
 
@@ -171,6 +187,7 @@ enum WordKind {
     Int(i32),
     XT(XT),
     Str(ST),
+    Addr(Addr),
 }
 
 impl Word {
@@ -196,12 +213,20 @@ impl Word {
         Word((x & WORD_STR_MASK) | WORD_STR_BITS)
     }
 
+    fn addr(x: u32) -> Word {
+        Addr(x).to_word()
+    }
+
     pub fn from_xt(xt: XT) -> Word {
         Word::xt(xt.0)
     }
 
     pub fn from_str(st: ST) -> Word {
         st.to_word()
+    }
+
+    pub fn from_addr(addr: Addr) -> Word {
+        addr.to_word()
     }
 
     pub fn kind(self) -> WordKind {
@@ -211,6 +236,9 @@ impl Word {
                 // FIXME: unwrap!
                 WordKind::Str(ST::from_u32(x).unwrap())
             },
+            x if (x & Addr::ADDR_BIT) != 0 => {
+                WordKind::Addr(Addr(x & Addr::MASK))
+            }
             x => { WordKind::XT(XT(x & WORD_XT_MASK)) },
         }
     }
@@ -226,6 +254,10 @@ impl Word {
     pub fn to_str(self) -> Option<ST> {
         if let WordKind::Str(x) = self.kind() { Some(x) } else { None }
     }
+
+    pub fn to_addr(self) -> Option<Addr> {
+        if let WordKind::Addr(x) = self.kind() { Some(x) } else { None }
+    }
 }
 
 impl std::fmt::Display for Word {
@@ -233,6 +265,7 @@ impl std::fmt::Display for Word {
         match self.kind() {
             WordKind::Int(x) => { formatter.write_fmt(format_args!("[int] {}", x)) },
             WordKind::XT(XT(x))  => { formatter.write_fmt(format_args!("[xt] {}", x)) },
+            WordKind::Addr(Addr(x))  => { formatter.write_fmt(format_args!("[addr] {}", x)) },
             WordKind::Str(st) => {
                 match st {
                     ST::Allocated(v) => {
@@ -318,7 +351,7 @@ struct ToyForth<'tf> {
     ufuncs: Vec<ForthFunc<'tf>>,
 
     dict: Vec<DictEntry>,
-    data: Vec<Word>,
+    vars: Vec<Word>,
     strings: std::vec::Vec<u8>,
     code: Vec<Instr>,
 
@@ -375,7 +408,8 @@ enum ForthError {
     StringOffsetTooLarge,
 
     FunctionSpaceOverflow,
-    CellSpaceOverflow,
+    DictSpaceOverflow,
+    VarSpaceOverflow,
     StringSpaceOverflow,
 
     UnfinishedColonDefinition,
@@ -388,6 +422,7 @@ enum ForthError {
     InvalidCell(XT),
     InvalidExecutionToken(Word),
     InvalidString(ST),
+    InvalidAddress(Addr),
     InvalidCountedString(ST),
     InvalidStringValue(u32),
     InvalidDelimiter(i32),
@@ -410,7 +445,7 @@ impl<'tf> ToyForth<'tf> {
             ufuncs:  std::vec::Vec::new(),
 
             dict:    std::vec::Vec::new(),
-            data:    std::vec::Vec::new(),
+            vars:    std::vec::Vec::new(),
             strings: std::vec::Vec::new(),
             code:    std::vec::Vec::new(),
 
@@ -460,8 +495,12 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("R>", ToyForth::builtin_ret_to_data);
 
         tf.add_func("CONSTANT", ToyForth::builtin_constant);
-        // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
+        tf.add_func("VARIABLE", ToyForth::builtin_variable);
 
+        tf.add_func("!", ToyForth::builtin_var_set);
+        tf.add_func("@", ToyForth::builtin_var_get);
+
+        // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
         eprintln!("Cell size is {}", std::mem::size_of::<Instr>());
         eprintln!("Prim size is {}", std::mem::size_of::<Primitive>());
@@ -622,6 +661,10 @@ impl<'tf> ToyForth<'tf> {
 
     pub fn char_here(&self) -> u32 {
         return self.strings.len() as u32;
+    }
+
+    pub fn addr_here(&self) -> u32 {
+        return self.vars.len() as u32;
     }
 
     pub fn stack_depth(&self) -> usize {
@@ -940,6 +983,53 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn new_var(&mut self, initial_value: Word) -> Result<Addr, ForthError> {
+        let addr = self.vars.len();
+
+        if addr > (Addr::MAX as usize) {
+            return Err(ForthError::VarSpaceOverflow);
+        }
+
+        self.vars.push(initial_value);
+        Ok(Addr(addr as u32))
+    }
+
+    fn get_var_at(&mut self, addr: Addr) -> Result<Word, ForthError> {
+        let ind = addr.0 as usize;
+
+        if ind >= self.vars.len() {
+            return Err(ForthError::InvalidAddress(addr));
+        }
+
+        Ok(self.vars[ind])
+    }
+
+    fn set_var_at(&mut self, addr: Addr, value: Word) -> Result<(), ForthError> {
+        let ind = addr.0 as usize;
+
+        if ind >= self.vars.len() {
+            return Err(ForthError::InvalidAddress(addr));
+        }
+
+        self.vars[ind] = value;
+
+        Ok(())
+    }
+
+    fn builtin_var_get(&mut self) -> Result<(), ForthError> {
+        let addr = self.pop_addr()?;
+        let w = self.get_var_at(addr)?;
+        self.push(w)?;
+        Ok(())
+    }
+
+    fn builtin_var_set(&mut self) -> Result<(), ForthError> {
+        let addr = self.pop_addr()?;
+        let val = self.pop().ok_or(ForthError::StackUnderflow)?;
+        self.set_var_at(addr, val)?;
+        Ok(())
+    }
+
     fn math(&mut self, op: u8) -> Result<(),ForthError> {
         let op1 = self.pop_kind();
         let op2 = self.pop_kind();
@@ -1234,6 +1324,25 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn builtin_variable(&mut self) -> Result<(), ForthError> {
+        self.push_int(' ' as i32)?;
+        self.builtin_parse()?;
+
+        let len = self.pop_int()?;
+        let st = self.pop_str()?;
+        if len == 0 {
+            return Err(ForthError::InvalidEmptyString);
+        }
+
+        let addr = self.new_var(Word(0))?;
+
+        // FIXME: completely unnecessary copy here...
+        let s = self.maybe_string_at(st)?.to_string();
+        self.add_word(&s, &[ Instr::Prim(Primitive::Push(addr.to_word())), Instr::Unnest ])?;
+
+        Ok(())
+    }
+
     fn builtin_colon(&mut self) -> Result<(), ForthError> {
         self.push_int(' ' as i32)?;
         self.builtin_parse()?;
@@ -1434,6 +1543,15 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    fn pop_addr(&mut self) -> Result<Addr,ForthError> {
+        let v = self.pop_kind().ok_or(ForthError::StackUnderflow)?;
+        if let WordKind::Addr(addr) = v {
+            Ok(addr)
+        } else {
+            Err(ForthError::InvalidArgument)
+        }
+    }
+
     fn pop_kind(&mut self) -> Option<WordKind> {
         self.dstack.pop().map(Word::kind)
     }
@@ -1549,15 +1667,61 @@ mod tests {
 
         assert_eq!(Word::xt(123).to_int(), None);
         assert_eq!(Word::xt(123).to_str(), None);
+        assert_eq!(Word::xt(123).to_addr(), None);
 
         assert_eq!(Word::str(123).to_int(), None);
         assert_eq!(Word::str(123).to_xt(), None);
+        assert_eq!(Word::str(123).to_addr(), None);
 
         assert_eq!(Word::int(123).to_xt(), None);
         assert_eq!(Word::int(123).to_str(), None);
+        assert_eq!(Word::int(123).to_addr(), None);
 
         assert_eq!(Word::int(-123).to_xt(), None);
         assert_eq!(Word::int(-123).to_str(), None);
+        assert_eq!(Word::int(-123).to_addr(), None);
+
+        assert_eq!(Word::addr(123), Word(Word::HIGH_BIT | Word::SIGN_BIT | Addr::ADDR_BIT | 123));
+        assert_eq!(Word::addr(123), Addr(123).to_word());
+        assert_eq!(Word::addr(123).to_addr().unwrap(), Addr(123));
+        assert_eq!(Word::addr(123).to_xt(), None);
+        assert_eq!(Word::addr(123).to_str(), None);
+    }
+
+    #[test]
+    #[ignore]
+    fn all_xt_values() {
+        for x in 0 .. (XT::MAX+1) {
+            let w = Word::xt(x);
+            assert_eq!(w.to_xt().unwrap(), XT(x), "word {:?} does not convert to XT({}) ", w, x);
+            assert_eq!(w.to_int(),  None, "XT({}) incorrectly shares a representation with int", x);
+            assert_eq!(w.to_str(),  None, "XT({}) incorrectly shares a representation with ST", x);
+            assert_eq!(w.to_addr(), None, "XT({}) incorrectly shares a representation with Addr", x);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn all_addr_values() {
+        for x in 0 .. (Addr::MAX+1) {
+            let w = Word::addr(x);
+            assert_eq!(w.to_addr().unwrap(), Addr(x), "word {:?} does not convert to Addr({}) ", w, x);
+            assert_eq!(w.to_int(), None, "Addr({}) incorrectly shares a representation with int", x);
+            assert_eq!(w.to_str(), None, "Addr({}) incorrectly shares a representation with ST", x);
+            assert_eq!(w.to_xt(),  None, "Addr({}) incorrectly shares a representation with XT", x);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn all_int_values() {
+        for x in Word::INT_MIN .. (Word::INT_MAX+1) {
+            let w = Word::int(x);
+            assert_eq!(w.to_int().unwrap(), x, "word {:?} does not convert to integer {} ", w, x);
+            assert_eq!(w.to_xt(),  None, "int({}) incorrectly shares a representation with XT", x);
+            assert_eq!(w.to_str(), None, "int({}) incorrectly shares a representation with ST", x);
+            assert_eq!(w.to_addr(), None, "int({}) incorrectly shares a representation with Addr", x);
+        }
     }
 
     #[test]
@@ -2169,6 +2333,40 @@ mod tests {
         forth.interpret("13 my_word").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 27);
+    }
+
+    #[test]
+    fn can_allocate_and_use_vars() {
+        let mut forth = ToyForth::new();
+
+        let addr = forth.new_var(Word::int(0)).unwrap();
+        assert_eq!(forth.get_var_at(addr).unwrap(), Word::int(0));
+
+        forth.set_var_at(addr, Word::int(123)).unwrap();
+        assert_eq!(forth.get_var_at(addr).unwrap(), Word::int(123));
+    }
+
+    #[test]
+    fn forth_can_allocate_and_use_vars() {
+        let mut forth = ToyForth::new();
+
+        let base = Addr(forth.addr_here());
+
+        forth.interpret("VARIABLE V1").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("V1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+
+        assert_eq!(forth.pop_addr().unwrap(), base);
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("999 V1 !").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("V1 @").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 999);
     }
 }
 
