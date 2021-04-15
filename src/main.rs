@@ -298,7 +298,7 @@ enum Primitive {
     Dup,
     Swap,
     Over,
-    Math{op:u8},
+    Math(BinOp),
     Branch(i32),
     BranchOnZero(i32),  // branches if stack top is 0
     EOL,
@@ -307,6 +307,19 @@ enum Primitive {
     DefWord,
     Func(u32),
     // Immediate,
+}
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+#[repr(u8)]
+enum BinOp {
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Greater,
+    Less,
+    Equal,
+    NotEqual,
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -383,15 +396,6 @@ struct LexError1<'a> {
     error: LexErrorType,
     source: &'a str,
 }
-
-const MATH_PLUS     : u8 = 0;
-const MATH_MINUS    : u8 = 1;
-const MATH_STAR     : u8 = 2;
-const MATH_SLASH    : u8 = 3;
-const MATH_GREATER  : u8 = 4;
-const MATH_LESS     : u8 = 5;
-const MATH_EQUAL    : u8 = 6;
-const MATH_NOTEQUAL : u8 = 7;
 
 #[derive(Debug)]
 enum ForthError {
@@ -480,15 +484,15 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("SWAP", Primitive::Swap);
         tf.add_prim("OVER", Primitive::Over);
 
-        tf.add_prim("+", Primitive::Math{op:MATH_PLUS});
-        tf.add_prim("-", Primitive::Math{op:MATH_MINUS});
-        tf.add_prim("*", Primitive::Math{op:MATH_STAR});
-        tf.add_prim("/", Primitive::Math{op:MATH_SLASH});
+        tf.add_prim("+", Primitive::Math(BinOp::Plus));
+        tf.add_prim("-", Primitive::Math(BinOp::Minus));
+        tf.add_prim("*", Primitive::Math(BinOp::Star));
+        tf.add_prim("/", Primitive::Math(BinOp::Slash));
 
-        tf.add_prim(">", Primitive::Math{op:MATH_GREATER});
-        tf.add_prim("<", Primitive::Math{op:MATH_LESS});
-        tf.add_prim("=", Primitive::Math{op:MATH_EQUAL});
-        tf.add_prim("<>", Primitive::Math{op:MATH_NOTEQUAL});
+        tf.add_prim(">", Primitive::Math(BinOp::Greater));
+        tf.add_prim("<", Primitive::Math(BinOp::Less));
+        tf.add_prim("=", Primitive::Math(BinOp::Equal));
+        tf.add_prim("<>", Primitive::Math(BinOp::NotEqual));
 
         // words that may be replaced with Forth definitions at some point
         tf.add_prim("BL", Primitive::Push(Word::int(' ' as i32)));
@@ -1093,26 +1097,26 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    fn math(&mut self, op: u8) -> Result<(),ForthError> {
+    fn binop(&mut self, op: BinOp) -> Result<(),ForthError> {
         let b = self.pop_int()?;
         let a = self.pop_int()?;
 
-        eprintln!("op = {}, a={}, b={}", op, a,b);
+        eprintln!("op = {:?}, a={}, b={}", op, a,b);
         match op {
-            MATH_PLUS  => { self.push(Word::int(a+b))?; },
-            MATH_MINUS => { self.push(Word::int(a-b))?; },
-            MATH_STAR  => { self.push(Word::int(a*b))?; },
-            MATH_SLASH => {
+            BinOp::Plus  => { self.push(Word::int(a+b))?; },
+            BinOp::Minus => { self.push(Word::int(a-b))?; },
+            BinOp::Star  => { self.push(Word::int(a*b))?; },
+            BinOp::Slash => {
                 if b != 0 {
                     self.push(Word::int(a/b))?;
                 } else {
                     return Err(ForthError::DivisionByZero);
                 }
             },
-            MATH_GREATER  => { self.push(Word::int(if a>b { 1 } else { 0 }))?; },
-            MATH_LESS     => { self.push(Word::int(if a<b { 1 } else { 0 }))?; },
-            MATH_EQUAL    => { self.push(Word::int(if a==b { 1 } else { 0 }))?; },
-            MATH_NOTEQUAL => { self.push(Word::int(if a != b { 1 } else { 0 }))?; },
+            BinOp::Greater  => { self.push(Word::int(if a>b { 1 } else { 0 }))?; },
+            BinOp::Less     => { self.push(Word::int(if a<b { 1 } else { 0 }))?; },
+            BinOp::Equal    => { self.push(Word::int(if a==b { 1 } else { 0 }))?; },
+            BinOp::NotEqual => { self.push(Word::int(if a != b { 1 } else { 0 }))?; },
             _ => {
                 return Err(ForthError::InvalidOperation);
             }
@@ -1729,8 +1733,8 @@ impl<'tf> ToyForth<'tf> {
                         pc += 1;
                     }
                 },
-                Instr::Prim(Primitive::Math{op}) => {
-                    self.math(op)?;
+                Instr::Prim(Primitive::Math(op)) => {
+                    self.binop(op)?;
                     pc += 1;
                 },
                 Instr::Prim(Primitive::EOL) => {
@@ -1935,9 +1939,9 @@ mod tests {
         let code = vec![
             Instr::Prim(Primitive::Push(Word::int(4314))),
             Instr::Prim(Primitive::Push(Word::int(-132))),
-            Instr::Prim(Primitive::Math{op:MATH_PLUS}),
+            Instr::Prim(Primitive::Math(BinOp::Plus)),
             Instr::Prim(Primitive::Push(Word::int(-10))),
-            Instr::Prim(Primitive::Math{op:MATH_STAR}),
+            Instr::Prim(Primitive::Math(BinOp::Star)),
             Instr::Prim(Primitive::Bye),
         ];
 
@@ -1958,9 +1962,9 @@ mod tests {
 
         /* f(x) = 2*x + 1 */
         entries[0] = Instr::Prim(Primitive::Push(Word::int(2)));
-        entries[1] = Instr::Prim(Primitive::Math{op:MATH_STAR});
+        entries[1] = Instr::Prim(Primitive::Math(BinOp::Star));
         entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
-        entries[3] = Instr::Prim(Primitive::Math{op:MATH_PLUS});
+        entries[3] = Instr::Prim(Primitive::Math(BinOp::Plus));
         entries[4] = Instr::Unnest;
 
         let xt1 = forth.add_code(&vec![
@@ -1983,9 +1987,9 @@ mod tests {
 
         /* f(x) = 2*x + 1 */
         entries[0] = Instr::Prim(Primitive::Push(Word::int(2)));
-        entries[1] = Instr::Prim(Primitive::Math{op:MATH_STAR});
+        entries[1] = Instr::Prim(Primitive::Math(BinOp::Star));
         entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
-        entries[3] = Instr::Prim(Primitive::Math{op:MATH_PLUS});
+        entries[3] = Instr::Prim(Primitive::Math(BinOp::Plus));
         entries[4] = Instr::Unnest;
 
         forth.define_word("my_func", xt).unwrap();
@@ -2002,9 +2006,9 @@ mod tests {
 
         /* f(x) = 2*x + 1 */
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(2))));
-        forth.push_cell(Instr::Prim(Primitive::Math{op:MATH_STAR}));
+        forth.push_cell(Instr::Prim(Primitive::Math(BinOp::Star)));
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
-        forth.push_cell(Instr::Prim(Primitive::Math{op:MATH_PLUS}));
+        forth.push_cell(Instr::Prim(Primitive::Math(BinOp::Plus)));
         forth.push_cell(Instr::Unnest);
 
         forth.define_word("my_func", xt).unwrap();
@@ -2034,9 +2038,9 @@ mod tests {
 
         /* f(x) = 2*x + 1 */
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(2))));
-        forth.push_cell(Instr::Prim(Primitive::Math{op:MATH_STAR}));
+        forth.push_cell(Instr::Prim(Primitive::Math(BinOp::Star)));
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
-        forth.push_cell(Instr::Prim(Primitive::Math{op:MATH_PLUS}));
+        forth.push_cell(Instr::Prim(Primitive::Math(BinOp::Plus)));
         forth.push_cell(Instr::Unnest);
 
         forth.input.push_str("my_func");
@@ -2226,9 +2230,9 @@ mod tests {
 
         let xt = forth.add_word("my_func", &vec![
            Instr::Prim(Primitive::Push(Word::int(2))),
-           Instr::Prim(Primitive::Math{op:MATH_STAR}),
+           Instr::Prim(Primitive::Math(BinOp::Star)),
            Instr::Prim(Primitive::Push(Word::int(1))),
-           Instr::Prim(Primitive::Math{op:MATH_PLUS}),
+           Instr::Prim(Primitive::Math(BinOp::Plus)),
            Instr::Unnest,
         ]).unwrap();
 
@@ -2274,9 +2278,9 @@ mod tests {
 
         let xt = forth.add_word("my_func", &vec![
            Instr::Prim(Primitive::Push(Word::int(2))),
-           Instr::Prim(Primitive::Math{op:MATH_STAR}),
+           Instr::Prim(Primitive::Math(BinOp::Star)),
            Instr::Prim(Primitive::Push(Word::int(1))),
-           Instr::Prim(Primitive::Math{op:MATH_PLUS}),
+           Instr::Prim(Primitive::Math(BinOp::Plus)),
            Instr::Unnest,
         ]).unwrap();
 
@@ -2325,9 +2329,9 @@ mod tests {
 
         forth.add_word("my_func", &vec![
            Instr::Prim(Primitive::Push(Word::int(2))),
-           Instr::Prim(Primitive::Math{op:MATH_STAR}),
+           Instr::Prim(Primitive::Math(BinOp::Star)),
            Instr::Prim(Primitive::Push(Word::int(1))),
-           Instr::Prim(Primitive::Math{op:MATH_PLUS}),
+           Instr::Prim(Primitive::Math(BinOp::Plus)),
            Instr::Unnest,
         ]).unwrap();
 
