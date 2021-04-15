@@ -431,6 +431,8 @@ impl std::convert::From<std::io::Error> for ForthError {
 }
 
 impl<'tf> ToyForth<'tf> {
+    const STATE_ADDR: Addr = Addr(0);
+
     pub fn new() -> ToyForth<'tf> {
         let mut tf = ToyForth{
             dstack:  std::vec::Vec::new(),
@@ -492,6 +494,13 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func("!", ToyForth::builtin_var_set);
         tf.add_func("@", ToyForth::builtin_var_get);
+
+        // define state variables
+        let state_vars = vec![ "STATE" ];
+        for v in &state_vars {
+            let addr = tf.new_var(Word(0)).unwrap();
+            tf.add_prim(v, Primitive::Push(addr.to_word()));
+        }
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
@@ -2355,6 +2364,19 @@ mod tests {
         forth.interpret("V1 @").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 999);
+    }
+
+    #[test]
+    fn can_query_special_vars() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("STATE").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_addr().unwrap(), ToyForth::STATE_ADDR);
+
+        forth.interpret("STATE @").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
     }
 }
 
