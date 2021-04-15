@@ -299,6 +299,8 @@ enum Primitive {
     Swap,
     Over,
     Math{op:u8},
+    Branch(i32),
+    BranchOnZero(i32),  // branches if stack top is 0
     EOL,
     Lookup,
     DefStr,
@@ -342,6 +344,7 @@ impl DictEntry {
 struct ToyForth<'tf> {
     dstack: Vec<Word>,
     rstack: Vec<Word>,
+    cstack: Vec<XT>,
     ufuncs: Vec<ForthFunc<'tf>>,
 
     dict: Vec<DictEntry>,
@@ -393,6 +396,7 @@ const MATH_NOTEQUAL : u8 = 7;
 #[derive(Debug)]
 enum ForthError {
     StackUnderflow,
+    ControlStackUnderflow,
     ReturnStackUnderflow,
 
     InvalidOperation,
@@ -411,6 +415,7 @@ enum ForthError {
     StringSpaceOverflow,
 
     InvalidCompilerWord,
+    InvalidInterpreterWord,
     UnfinishedColonDefinition,
     DictEmpty,
 
@@ -420,6 +425,7 @@ enum ForthError {
     WordNotFound(ST),
 
     InvalidCell(XT),
+    InvalidControlInstruction(XT),
     InvalidExecutionToken(Word),
     InvalidString(ST),
     InvalidAddress(Addr),
@@ -446,6 +452,7 @@ impl<'tf> ToyForth<'tf> {
         let mut tf = ToyForth{
             dstack:  std::vec::Vec::new(),
             rstack:  std::vec::Vec::new(),
+            cstack:  std::vec::Vec::new(),
             ufuncs:  std::vec::Vec::new(),
 
             dict:    std::vec::Vec::new(),
@@ -494,6 +501,10 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func(".", ToyForth::builtin_dot);
         tf.add_func(":", ToyForth::builtin_colon);
         tf.add_immed(";", ToyForth::builtin_semi);
+
+        tf.add_immed("IF", ToyForth::builtin_if);
+        tf.add_immed("ELSE", ToyForth::builtin_else);
+        tf.add_immed("THEN", ToyForth::builtin_then);
 
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
@@ -1419,7 +1430,7 @@ impl<'tf> ToyForth<'tf> {
 
     fn builtin_semi(&mut self) -> Result<(), ForthError> {
         if !self.compiling() {
-            return Err(ForthError::InvalidCompilerWord);
+            return Err(ForthError::InvalidInterpreterWord);
         }
 
         eprintln!("SEMI: COMPILING");
@@ -1440,6 +1451,68 @@ impl<'tf> ToyForth<'tf> {
         self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0))?;
         self.set_var_at(ToyForth::ADDR_SLASH_CXT, Word(0))?;
         self.set_var_at(ToyForth::ADDR_STATE, Word::int(0))?;
+
+        Ok(())
+    }
+
+    fn builtin_if(&mut self) -> Result<(), ForthError> {
+        if !self.compiling() {
+            return Err(ForthError::InvalidCompilerWord);
+        }
+
+        // add branch, fixup cstack reference later
+        let xt = self.push_cell(Instr::Prim(Primitive::BranchOnZero(0)));
+        self.cstack.push(xt);
+
+        Ok(())
+    }
+
+    fn builtin_then(&mut self) -> Result<(), ForthError> {
+        if !self.compiling() {
+            return Err(ForthError::InvalidCompilerWord);
+        }
+
+        let xt = self.mark_cell();
+        let if_else_xt = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
+
+        // XXX: check for overflow
+        let delta : i32 = ((xt.0 as i64) - (if_else_xt.0 as i64)) as i32;
+
+        match self.code[if_else_xt.0 as usize] {
+            Instr::Prim(Primitive::Branch(_)) => {
+                self.code[if_else_xt.0 as usize] = Instr::Prim(Primitive::Branch(delta));
+            },
+            Instr::Prim(Primitive::BranchOnZero(_)) => {
+                self.code[if_else_xt.0 as usize] = Instr::Prim(Primitive::BranchOnZero(delta));
+            },
+            _ => {
+                return Err(ForthError::InvalidControlInstruction(if_else_xt));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn builtin_else(&mut self) -> Result<(), ForthError> {
+        if !self.compiling() {
+            return Err(ForthError::InvalidCompilerWord);
+        }
+
+        let if_xt = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
+        let else_xt = self.push_cell(Instr::Prim(Primitive::Branch(0)));
+
+        let xt = self.mark_cell();
+        self.cstack.push(else_xt);
+
+        let delta : i32 = ((xt.0 as i64) - (if_xt.0 as i64)) as i32;
+        match self.code[if_xt.0 as usize] {
+            Instr::Prim(Primitive::BranchOnZero(_)) => {
+                self.code[if_xt.0 as usize] = Instr::Prim(Primitive::BranchOnZero(delta));
+            },
+            _ => {
+                return Err(ForthError::InvalidControlInstruction(if_xt));
+            }
+        }
 
         Ok(())
     }
@@ -1632,6 +1705,29 @@ impl<'tf> ToyForth<'tf> {
                 Instr::Prim(Primitive::Over) => {
                     self.over()?;
                     pc += 1;
+                },
+                Instr::Prim(Primitive::Branch(delta)) => {
+                    if delta == 0 {
+                        return Err(ForthError::InvalidControlInstruction(xt));
+                    }
+
+                    let new_pc = (pc as i64) + (delta as i64);
+                    // FIXME: check range
+                    pc = new_pc as u32;
+                },
+                Instr::Prim(Primitive::BranchOnZero(delta)) => {
+                    if delta == 0 {
+                        return Err(ForthError::InvalidControlInstruction(xt));
+                    }
+
+                    let arg = self.pop_int()?;
+                    if arg == 0 {
+                        let new_pc = (pc as i64) + (delta as i64);
+                        // FIXME: check range
+                        pc = new_pc as u32;
+                    } else {
+                        pc += 1;
+                    }
                 },
                 Instr::Prim(Primitive::Math{op}) => {
                     self.math(op)?;
@@ -2460,6 +2556,27 @@ mod tests {
 
         forth.interpret("3 3 <>").unwrap();
         assert_eq!(forth.pop_int().unwrap(), 0);
+    }
+
+    #[test]
+    fn if_else_then() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret(": foo dup 5 > if . 123 else . 456 then ;").unwrap();
+
+        let foo_xt = forth.lookup_word("foo").unwrap();
+        for (i,instr) in forth.code[foo_xt.0 as usize..].iter().enumerate() {
+            eprintln!("[{:3}] {:?}", i, instr);
+            if *instr == Instr::Unnest {
+                break
+            }
+        }
+
+        forth.interpret("7 foo").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 123);
+
+        forth.interpret("1 foo").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 456);
     }
 }
 
