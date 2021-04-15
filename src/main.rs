@@ -319,6 +319,7 @@ enum Instr {
     Unnest,
 }
 
+#[derive(Debug,Clone,Copy)]
 struct DictEntry {
     st: ST,
     xt: XT,
@@ -405,7 +406,9 @@ enum ForthError {
     VarSpaceOverflow,
     StringSpaceOverflow,
 
+    InvalidCompilerWord,
     UnfinishedColonDefinition,
+    DictEmpty,
 
     NotImplemented,
 
@@ -431,7 +434,9 @@ impl std::convert::From<std::io::Error> for ForthError {
 }
 
 impl<'tf> ToyForth<'tf> {
-    const STATE_ADDR: Addr = Addr(0);
+    const ADDR_STATE:      Addr = Addr(0);
+    const ADDR_SLASH_CDEF: Addr = Addr(1);
+    const ADDR_SLASH_CXT:  Addr = Addr(2);
 
     pub fn new() -> ToyForth<'tf> {
         let mut tf = ToyForth{
@@ -479,6 +484,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("PARSE", ToyForth::builtin_parse);
         tf.add_func(".", ToyForth::builtin_dot);
         tf.add_func(":", ToyForth::builtin_colon);
+        tf.add_immed(";", ToyForth::builtin_semi);
+
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
         tf.add_func("FIND", ToyForth::builtin_find);
@@ -496,7 +503,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("@", ToyForth::builtin_var_get);
 
         // define state variables
-        let state_vars = vec![ "STATE" ];
+        let state_vars = vec![ "STATE", "/CDEF", "/CXT" ];
         for v in &state_vars {
             let addr = tf.new_var(Word(0)).unwrap();
             tf.add_prim(v, Primitive::Push(addr.to_word()));
@@ -529,13 +536,20 @@ impl<'tf> ToyForth<'tf> {
         self.builtin_interpret()
     }
 
+    pub fn compiling(&self) -> bool {
+        return self.vars[0].to_int().unwrap_or(0) != 0;
+    }
+
     pub fn builtin_interpret(&mut self) -> Result<(), ForthError> {
         loop {
             self.push_int(' ' as i32)?;
             self.builtin_parse()?;
             self.builtin_find_name()?;
 
-            if self.pop_int()? == 0 {           // ( caddr u 0 -- caddr u )
+            let is_compiling = self.compiling();
+            let wh = self.pop_int()?;
+
+            if wh == 0 {                        // ( caddr u 0 -- caddr u )
                 self.dup()?;                    // ( caddr u -- caddr u u )
                 let len = self.pop_int()?;      // ( caddr u u -- caddr u )
 
@@ -561,10 +575,19 @@ impl<'tf> ToyForth<'tf> {
                 }
 
                 self.drop()?;                   // ( ud caddr -- ud )
+
+                if is_compiling {
+                    let num = self.pop_int()?;
+                    self.push_cell(Instr::Prim(Primitive::Push(Word::int(num))));
+                }
             } else {
                 let xt = self.pop_xt()?;
-                self.ret_push_bye()?;
-                self.exec(xt)?;
+                if wh == 1 || !is_compiling {
+                    self.ret_push_bye()?;
+                    self.exec(xt)?;
+                } else {
+                    self.push_cell(Instr::DoCol(xt));
+                }
             }
         }
 
@@ -706,6 +729,13 @@ impl<'tf> ToyForth<'tf> {
         self.add_function(word,func).unwrap()
     }
 
+    fn add_immed(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> XT {
+        let xt = self.add_function(word,func).unwrap();
+        self.builtin_immediate().unwrap();
+
+        return xt;
+    }
+
     pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<XT,ForthError> {
         self.push_string(word)?;
         let func_ind = self.ufuncs.len();
@@ -739,6 +769,17 @@ impl<'tf> ToyForth<'tf> {
         });
 
         return Ok(st);
+    }
+
+    pub fn lookup_dict_entry(&self, word: &str) -> Result<DictEntry, ForthError> {
+        for ent in self.dict.iter().rev() {
+            let entry_word = self.maybe_string_at(ent.st)?;
+            if word.eq_ignore_ascii_case(entry_word) {
+                return Ok(*ent);
+            }
+        }
+
+        return Err(ForthError::StringNotFound);
     }
 
     pub fn lookup_word(&self, word: &str) -> Result<XT, ForthError> {
@@ -1081,10 +1122,11 @@ impl<'tf> ToyForth<'tf> {
         let st = self.pop_str()?;
         let s = self.maybe_counted_string_at(st)?;
 
-        match self.lookup_word(s) {
-            Ok(xt) => {
-                self.push(Word::from_xt(xt))?;
-                self.push(Word::int(1))?;
+        match self.lookup_dict_entry(s) {
+            Ok(entry) => {
+                self.push(Word::from_xt(entry.xt))?;
+                let wh = if (entry.flags & DictEntry::IMMEDIATE) != 0 { 1 } else { -1 };
+                self.push(Word::int(wh))?;
                 Ok(())
             },
             Err(ForthError::StringNotFound) => {
@@ -1112,10 +1154,11 @@ impl<'tf> ToyForth<'tf> {
             if s0.len() <= l { &s0 } else { &s0[..l] }
         };
 
-        match self.lookup_word(s) {
-            Ok(xt) => {
-                self.push(Word::from_xt(xt))?;
-                self.push(Word::int(1))?;
+        match self.lookup_dict_entry(s) {
+            Ok(entry) => {
+                self.push(Word::from_xt(entry.xt))?;
+                let wh = if (entry.flags & DictEntry::IMMEDIATE) != 0 { 1 } else { -1 };
+                self.push(Word::int(wh))?;
                 Ok(())
             },
             Err(ForthError::StringNotFound) => {
@@ -1208,7 +1251,10 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_immediate(&mut self) -> Result<(),ForthError> {
-        Err(ForthError::NotImplemented)
+        let entry = self.dict.last_mut().ok_or(ForthError::DictEmpty)?;
+        entry.flags |= DictEntry::IMMEDIATE;
+
+        Ok(())
     }
 
     fn builtin_execute(&mut self) -> Result<(),ForthError> {
@@ -1357,51 +1403,42 @@ impl<'tf> ToyForth<'tf> {
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
+        let st = self.push_string(&s)?;
+
+        // XXX: check that STATE==0, /CDEF and /CXT are not set
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, st.to_word())?;
+
         let xt = self.mark_cell();
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT, xt.to_word())?;
+        self.set_var_at(ToyForth::ADDR_STATE, Word::int(1))?;
 
-        loop {
-            self.push_int(' ' as i32)?;
-            self.builtin_parse()?;
-            let wlen = self.pop_int()?;
-            let wst = self.pop_str()?;
-            let word = self.maybe_string_at(wst)?;
+        Ok(())
+    }
 
-            if wlen == 0 {
-                return Err(ForthError::UnfinishedColonDefinition);
-            }
-
-            if word == ";" {
-                break;
-            }
-
-            // TODO: lookup dict entry, check for primitive / immediate, etc.
-            match self.lookup_word(word) {
-                Ok(xt) => {
-                    self.push_cell(Instr::DoCol(xt));
-                },
-                Err(ForthError::StringNotFound) => {
-                    self.push_int(0)?;
-                    self.push(wst.to_word())?;
-                    self.push_int(wlen)?;
-                    self.builtin_to_number()?;          // ( 0 caddr u1 -- ud caddr u2 )
-                    let consumed = self.pop_int()?;     // ( ud caddr u2 -- ud caddr )
-                    self.drop()?;                       // ( ud caddr -- ud )
-                    if consumed < wlen {
-                        self.drop()?;                   // ( ud -- )
-                        return Err(ForthError::WordNotFound(wst));
-                    }
-
-                    let num = self.pop_int()?;
-                    self.push_cell(Instr::Prim(Primitive::Push(Word::int(num))));
-                },
-                Err(err) => {
-                    return Err(err);
-                }
-            }
+    fn builtin_semi(&mut self) -> Result<(), ForthError> {
+        if !self.compiling() {
+            return Err(ForthError::InvalidCompilerWord);
         }
 
+        eprintln!("SEMI: COMPILING");
+
         self.push_cell(Instr::Unnest);
-        self.define_word(&s, xt)?;
+        let st = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?.to_str().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
+        let xt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?.to_xt().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
+
+        eprintln!("SEMI: st = {:?} \"{}\", xt = {:?}",
+              st, self.string_at(st), xt);
+
+        self.dict.push(DictEntry{
+            st: st,
+            xt: xt,
+            flags: 0,
+        });
+
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT, Word(0))?;
+        self.set_var_at(ToyForth::ADDR_STATE, Word::int(0))?;
+
         Ok(())
     }
 
@@ -2116,7 +2153,7 @@ mod tests {
             forth.builtin_word().unwrap();
             forth.builtin_find().unwrap();
 
-            assert_eq!(forth.pop_int().unwrap(), 1);
+            assert_eq!(forth.pop_int().unwrap(), -1);
             assert_eq!(forth.pop_kind().unwrap(), WordKind::XT(xt));
         }
     }
@@ -2179,7 +2216,7 @@ mod tests {
             forth.builtin_parse().unwrap();
             forth.builtin_find_name().unwrap();
 
-            assert_eq!(forth.pop_int().unwrap(), 1);
+            assert_eq!(forth.pop_int().unwrap(), -1);
             assert_eq!(forth.pop_kind().unwrap(), WordKind::XT(xt));
         }
     }
@@ -2203,7 +2240,7 @@ mod tests {
         forth.builtin_word().unwrap();
         forth.builtin_find().unwrap();
 
-        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), -1);
         forth.builtin_execute().unwrap();
         assert_eq!(forth.pop_int().unwrap(), 2469);
     }
@@ -2372,7 +2409,7 @@ mod tests {
 
         forth.interpret("STATE").unwrap();
         assert_eq!(forth.stack_depth(), 1);
-        assert_eq!(forth.pop_addr().unwrap(), ToyForth::STATE_ADDR);
+        assert_eq!(forth.pop_addr().unwrap(), ToyForth::ADDR_STATE);
 
         forth.interpret("STATE @").unwrap();
         assert_eq!(forth.stack_depth(), 1);
