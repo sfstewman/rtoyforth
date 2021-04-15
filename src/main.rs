@@ -381,10 +381,14 @@ struct LexError1<'a> {
     source: &'a str,
 }
 
-const MATH_PLUS  : u8 = 0;
-const MATH_MINUS : u8 = 1;
-const MATH_STAR  : u8 = 2;
-const MATH_SLASH : u8 = 3;
+const MATH_PLUS     : u8 = 0;
+const MATH_MINUS    : u8 = 1;
+const MATH_STAR     : u8 = 2;
+const MATH_SLASH    : u8 = 3;
+const MATH_GREATER  : u8 = 4;
+const MATH_LESS     : u8 = 5;
+const MATH_EQUAL    : u8 = 6;
+const MATH_NOTEQUAL : u8 = 7;
 
 #[derive(Debug)]
 enum ForthError {
@@ -473,6 +477,11 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("-", Primitive::Math{op:MATH_MINUS});
         tf.add_prim("*", Primitive::Math{op:MATH_STAR});
         tf.add_prim("/", Primitive::Math{op:MATH_SLASH});
+
+        tf.add_prim(">", Primitive::Math{op:MATH_GREATER});
+        tf.add_prim("<", Primitive::Math{op:MATH_LESS});
+        tf.add_prim("=", Primitive::Math{op:MATH_EQUAL});
+        tf.add_prim("<>", Primitive::Math{op:MATH_NOTEQUAL});
 
         // words that may be replaced with Forth definitions at some point
         tf.add_prim("BL", Primitive::Push(Word::int(' ' as i32)));
@@ -1074,38 +1083,31 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn math(&mut self, op: u8) -> Result<(),ForthError> {
-        let op1 = self.pop_kind();
-        let op2 = self.pop_kind();
+        let b = self.pop_int()?;
+        let a = self.pop_int()?;
 
-        if let None = op1 {
-            return Err(ForthError::StackUnderflow);
-        }
-
-        if let None = op2 {
-            return Err(ForthError::StackUnderflow);
-        }
-
-        if let (Some(WordKind::Int(b)), Some(WordKind::Int(a))) = (op1,op2) {
-            match op {
-                MATH_PLUS  => { self.push(Word::int(a+b))?; },
-                MATH_MINUS => { self.push(Word::int(a-b))?; },
-                MATH_STAR  => { self.push(Word::int(a*b))?; },
-                MATH_SLASH => {
-                    if b != 0 {
-                        self.push(Word::int(a/b))?;
-                    } else {
-                        return Err(ForthError::DivisionByZero);
-                    }
-                },
-                _ => {
-                    return Err(ForthError::InvalidOperation);
+        eprintln!("op = {}, a={}, b={}", op, a,b);
+        match op {
+            MATH_PLUS  => { self.push(Word::int(a+b))?; },
+            MATH_MINUS => { self.push(Word::int(a-b))?; },
+            MATH_STAR  => { self.push(Word::int(a*b))?; },
+            MATH_SLASH => {
+                if b != 0 {
+                    self.push(Word::int(a/b))?;
+                } else {
+                    return Err(ForthError::DivisionByZero);
                 }
+            },
+            MATH_GREATER  => { self.push(Word::int(if a>b { 1 } else { 0 }))?; },
+            MATH_LESS     => { self.push(Word::int(if a<b { 1 } else { 0 }))?; },
+            MATH_EQUAL    => { self.push(Word::int(if a==b { 1 } else { 0 }))?; },
+            MATH_NOTEQUAL => { self.push(Word::int(if a != b { 1 } else { 0 }))?; },
+            _ => {
+                return Err(ForthError::InvalidOperation);
             }
-
-            return Ok(());
-        } else {
-            return Err(ForthError::InvalidArgument);
         }
+
+        return Ok(());
     }
 
     fn input_eol(&mut self) -> Result<(), ForthError> {
@@ -2413,6 +2415,50 @@ mod tests {
 
         forth.interpret("STATE @").unwrap();
         assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+    }
+
+    #[test]
+    fn comparisons() {
+        let mut forth = ToyForth::new();
+
+        // 5,3
+        forth.interpret("5 3 >").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret("5 3 <").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("5 3 =").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("5 3 <>").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        // 3,5
+        forth.interpret("3 5 >").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("3 5 <").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret("3 5 =").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("3 5 <>").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        // 3,3
+        forth.interpret("3 3 =").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret("3 3 >").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("3 3 <").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("3 3 <>").unwrap();
         assert_eq!(forth.pop_int().unwrap(), 0);
     }
 }
