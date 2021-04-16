@@ -299,6 +299,7 @@ enum Primitive {
     Swap,
     Over,
     BinaryOp(BinOp),
+    UnaryOp(UnaryOp),
     Branch(i32),
     BranchOnZero(i32),  // branches if stack top is 0
     EOL,
@@ -307,6 +308,12 @@ enum Primitive {
     DefWord,
     Func(u32),
     // Immediate,
+}
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+#[repr(u8)]
+enum UnaryOp {
+    Negate,
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -489,7 +496,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("*", Primitive::BinaryOp(BinOp::Star));
         tf.add_prim("/", Primitive::BinaryOp(BinOp::Slash));
 
-        // tf.add_prim("NEGATE", Primitive::BinOp{op:MATH_NEGATE});
+        tf.add_prim("NEGATE", Primitive::UnaryOp(UnaryOp::Negate));
 
         tf.add_prim(">", Primitive::BinaryOp(BinOp::Greater));
         tf.add_prim("<", Primitive::BinaryOp(BinOp::Less));
@@ -1137,6 +1144,13 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn unary_op(&mut self, op: UnaryOp) -> Result<(),ForthError> {
+        let a = self.pop_int()?;
+        match op {
+            UnaryOp::Negate => { self.push_int(-a)?; Ok(()) },
+        }
+    }
+
     fn binary_op(&mut self, op: BinOp) -> Result<(),ForthError> {
         let b = self.pop_int()?;
         let a = self.pop_int()?;
@@ -1769,6 +1783,10 @@ impl<'tf> ToyForth<'tf> {
                     } else {
                         pc += 1;
                     }
+                },
+                Instr::Prim(Primitive::UnaryOp(op)) => {
+                    self.unary_op(op)?;
+                    pc += 1;
                 },
                 Instr::Prim(Primitive::BinaryOp(op)) => {
                     self.binary_op(op)?;
