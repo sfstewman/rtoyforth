@@ -291,7 +291,7 @@ impl<'tf> PartialEq for ForthFunc<'tf> {
 impl<'tf> Eq for ForthFunc<'tf> { }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
-enum Primitive {
+enum Instr {
     Empty,
     Bye,
     Push(Word),
@@ -329,11 +329,6 @@ enum BinOp {
     Less,
     Equal,
     NotEqual,
-}
-
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]
-enum Instr {
-    Prim(Primitive),
 }
 
 #[derive(Debug,Clone,Copy)]
@@ -477,30 +472,30 @@ impl<'tf> ToyForth<'tf> {
         };
 
         // First word in dict (addr 0) always holds BYE
-        tf.push_cell(Instr::Prim(Primitive::Bye));
+        tf.push_cell(Instr::Bye);
 
         // set up standard dictionary
-        tf.add_prim("BYE", Primitive::Bye);
-        tf.add_prim("DUP", Primitive::Dup);
-        tf.add_prim("DROP", Primitive::Drop);
-        tf.add_prim("SWAP", Primitive::Swap);
-        tf.add_prim("OVER", Primitive::Over);
+        tf.add_prim("BYE", Instr::Bye);
+        tf.add_prim("DUP", Instr::Dup);
+        tf.add_prim("DROP", Instr::Drop);
+        tf.add_prim("SWAP", Instr::Swap);
+        tf.add_prim("OVER", Instr::Over);
 
-        tf.add_prim("+", Primitive::BinaryOp(BinOp::Plus));
-        tf.add_prim("-", Primitive::BinaryOp(BinOp::Minus));
-        tf.add_prim("*", Primitive::BinaryOp(BinOp::Star));
-        tf.add_prim("/", Primitive::BinaryOp(BinOp::Slash));
+        tf.add_prim("+", Instr::BinaryOp(BinOp::Plus));
+        tf.add_prim("-", Instr::BinaryOp(BinOp::Minus));
+        tf.add_prim("*", Instr::BinaryOp(BinOp::Star));
+        tf.add_prim("/", Instr::BinaryOp(BinOp::Slash));
 
-        tf.add_prim("NEGATE", Primitive::UnaryOp(UnaryOp::Negate));
+        tf.add_prim("NEGATE", Instr::UnaryOp(UnaryOp::Negate));
 
-        tf.add_prim(">", Primitive::BinaryOp(BinOp::Greater));
-        tf.add_prim("<", Primitive::BinaryOp(BinOp::Less));
-        tf.add_prim("=", Primitive::BinaryOp(BinOp::Equal));
-        tf.add_prim("<>", Primitive::BinaryOp(BinOp::NotEqual));
+        tf.add_prim(">", Instr::BinaryOp(BinOp::Greater));
+        tf.add_prim("<", Instr::BinaryOp(BinOp::Less));
+        tf.add_prim("=", Instr::BinaryOp(BinOp::Equal));
+        tf.add_prim("<>", Instr::BinaryOp(BinOp::NotEqual));
 
         // words that may be replaced with Forth definitions at some point
-        tf.add_prim("BL", Primitive::Push(Word::int(' ' as i32)));
-        tf.add_prim("CR", Primitive::Push(Word::int('\n' as i32)));
+        tf.add_prim("BL", Instr::Push(Word::int(' ' as i32)));
+        tf.add_prim("CR", Instr::Push(Word::int('\n' as i32)));
         tf.add_func("CHAR", ToyForth::builtin_char);
         tf.add_func("WORD", ToyForth::builtin_word);
         tf.add_func("C@", ToyForth::builtin_char_at);
@@ -535,14 +530,13 @@ impl<'tf> ToyForth<'tf> {
         let state_vars = vec![ "STATE", "/CDEF", "/CXT" ];
         for v in &state_vars {
             let addr = tf.new_var(Word(0)).unwrap();
-            tf.add_prim(v, Primitive::Push(addr.to_word()));
+            tf.add_prim(v, Instr::Push(addr.to_word()));
         }
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
-        eprintln!("Cell size is {}", std::mem::size_of::<Instr>());
-        eprintln!("Prim size is {}", std::mem::size_of::<Primitive>());
-        eprintln!("Word size is {}", std::mem::size_of::<Word>());
+        eprintln!("Code cell size is {}", std::mem::size_of::<Instr>());
+        eprintln!("Data cell size is {}", std::mem::size_of::<Word>());
 
         return tf;
     }
@@ -648,7 +642,7 @@ impl<'tf> ToyForth<'tf> {
 
                 if is_compiling {
                     let num = self.pop_int()?;
-                    self.push_cell(Instr::Prim(Primitive::Push(Word::int(num))));
+                    self.push_cell(Instr::Push(Word::int(num)));
                 }
             } else {
                 let xt = self.pop_xt()?;
@@ -656,7 +650,7 @@ impl<'tf> ToyForth<'tf> {
                     self.ret_push_bye()?;
                     self.exec(xt)?;
                 } else {
-                    self.push_cell(Instr::Prim(Primitive::DoCol(xt)));
+                    self.push_cell(Instr::DoCol(xt));
                 }
             }
         }
@@ -775,16 +769,16 @@ impl<'tf> ToyForth<'tf> {
     }
 
     // should only be called internally during dictionary bootstrap
-    fn add_prim(&mut self, word: &str, prim: Primitive) -> XT {
+    fn add_prim(&mut self, word: &str, prim: Instr) -> XT {
         self.add_primitive(word,prim).unwrap()
     }
 
-    pub fn add_primitive(&mut self, word: &str, prim: Primitive) -> Result<XT,ForthError> {
+    pub fn add_primitive(&mut self, word: &str, prim: Instr) -> Result<XT,ForthError> {
         let st = self.push_string(word)?;
 
         let xt = self.mark_cell();
-        self.push_cell(Instr::Prim(prim));
-        self.push_cell(Instr::Prim(Primitive::Unnest));
+        self.push_cell(prim);
+        self.push_cell(Instr::Unnest);
 
         self.dict.push(DictEntry{
             st: st,
@@ -815,7 +809,7 @@ impl<'tf> ToyForth<'tf> {
         }
 
         self.ufuncs.push(ForthFunc(func));
-        let xt = self.add_primitive(word, Primitive::Func(func_ind as u32))?;
+        let xt = self.add_primitive(word, Instr::Func(func_ind as u32))?;
         Ok(xt)
     }
 
@@ -879,7 +873,7 @@ impl<'tf> ToyForth<'tf> {
         }
 
         let xt = XT(ind as u32);
-        self.code.resize(ind + count, Instr::Prim(Primitive::Empty));
+        self.code.resize(ind + count, Instr::Empty);
 
         return (xt, &mut self.code[ind..]);
     }
@@ -1441,7 +1435,7 @@ impl<'tf> ToyForth<'tf> {
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        self.add_word(&s, &[ Instr::Prim(Primitive::Push(w)), Instr::Prim(Primitive::Unnest) ])?;
+        self.add_word(&s, &[ Instr::Push(w), Instr::Unnest ])?;
 
         Ok(())
     }
@@ -1460,7 +1454,7 @@ impl<'tf> ToyForth<'tf> {
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        self.add_word(&s, &[ Instr::Prim(Primitive::Push(addr.to_word())), Instr::Prim(Primitive::Unnest) ])?;
+        self.add_word(&s, &[ Instr::Push(addr.to_word()), Instr::Unnest ])?;
 
         Ok(())
     }
@@ -1496,7 +1490,7 @@ impl<'tf> ToyForth<'tf> {
 
         eprintln!("SEMI: COMPILING");
 
-        self.push_cell(Instr::Prim(Primitive::Unnest));
+        self.push_cell(Instr::Unnest);
         let st = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?.to_str().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
         let xt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?.to_xt().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
 
@@ -1522,7 +1516,7 @@ impl<'tf> ToyForth<'tf> {
         }
 
         // add branch, fixup cstack reference later
-        let xt = self.push_cell(Instr::Prim(Primitive::BranchOnZero(0)));
+        let xt = self.push_cell(Instr::BranchOnZero(0));
         self.cstack.push(xt);
 
         Ok(())
@@ -1540,11 +1534,11 @@ impl<'tf> ToyForth<'tf> {
         let delta : i32 = ((xt.0 as i64) - (if_else_xt.0 as i64)) as i32;
 
         match self.code[if_else_xt.0 as usize] {
-            Instr::Prim(Primitive::Branch(_)) => {
-                self.code[if_else_xt.0 as usize] = Instr::Prim(Primitive::Branch(delta));
+            Instr::Branch(_) => {
+                self.code[if_else_xt.0 as usize] = Instr::Branch(delta);
             },
-            Instr::Prim(Primitive::BranchOnZero(_)) => {
-                self.code[if_else_xt.0 as usize] = Instr::Prim(Primitive::BranchOnZero(delta));
+            Instr::BranchOnZero(_) => {
+                self.code[if_else_xt.0 as usize] = Instr::BranchOnZero(delta);
             },
             _ => {
                 return Err(ForthError::InvalidControlInstruction(if_else_xt));
@@ -1560,15 +1554,15 @@ impl<'tf> ToyForth<'tf> {
         }
 
         let if_xt = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
-        let else_xt = self.push_cell(Instr::Prim(Primitive::Branch(0)));
+        let else_xt = self.push_cell(Instr::Branch(0));
 
         let xt = self.mark_cell();
         self.cstack.push(else_xt);
 
         let delta : i32 = ((xt.0 as i64) - (if_xt.0 as i64)) as i32;
         match self.code[if_xt.0 as usize] {
-            Instr::Prim(Primitive::BranchOnZero(_)) => {
-                self.code[if_xt.0 as usize] = Instr::Prim(Primitive::BranchOnZero(delta));
+            Instr::BranchOnZero(_) => {
+                self.code[if_xt.0 as usize] = Instr::BranchOnZero(delta);
             },
             _ => {
                 return Err(ForthError::InvalidControlInstruction(if_xt));
@@ -1741,33 +1735,33 @@ impl<'tf> ToyForth<'tf> {
             let op = self.code[pc as usize];
             // eprintln!("pc = {}, code[pc] = {:?}", pc, op);
             match op {
-                Instr::Prim(Primitive::Empty) => {
+                Instr::Empty => {
                     return Err(ForthError::InvalidCell(XT(pc)));
                 },
-                Instr::Prim(Primitive::Bye) => {
+                Instr::Bye => {
                     return Ok(());
                 },
-                Instr::Prim(Primitive::Push(w)) => {
+                Instr::Push(w) => {
                     self.push(w)?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::Drop) => {
+                Instr::Drop => {
                     self.drop()?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::Dup) => {
+                Instr::Dup => {
                     self.dup()?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::Swap) => {
+                Instr::Swap => {
                     self.swap()?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::Over) => {
+                Instr::Over => {
                     self.over()?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::Branch(delta)) => {
+                Instr::Branch(delta) => {
                     if delta == 0 {
                         return Err(ForthError::InvalidControlInstruction(xt));
                     }
@@ -1776,7 +1770,7 @@ impl<'tf> ToyForth<'tf> {
                     // FIXME: check range
                     pc = new_pc as u32;
                 },
-                Instr::Prim(Primitive::BranchOnZero(delta)) => {
+                Instr::BranchOnZero(delta) => {
                     if delta == 0 {
                         return Err(ForthError::InvalidControlInstruction(xt));
                     }
@@ -1790,32 +1784,32 @@ impl<'tf> ToyForth<'tf> {
                         pc += 1;
                     }
                 },
-                Instr::Prim(Primitive::UnaryOp(op)) => {
+                Instr::UnaryOp(op) => {
                     self.unary_op(op)?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::BinaryOp(op)) => {
+                Instr::BinaryOp(op) => {
                     self.binary_op(op)?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::EOL) => {
+                Instr::EOL => {
                     self.input_eol()?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::Lookup) => {
+                Instr::Lookup => {
                     self.input_lookup()?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::DefStr) => {
+                Instr::DefStr => {
                     self.defstr()?;
                     pc += 1;
                 },
-                Instr::Prim(Primitive::DefWord) => {
+                Instr::DefWord => {
                     self.defword()?;
                     pc += 1;
                 },
 
-                Instr::Prim(Primitive::Func(x)) => {
+                Instr::Func(x) => {
                     let ind = x as usize;
                     if ind >= self.ufuncs.len() {
                         return Err(ForthError::InvalidFunction(x));
@@ -1827,11 +1821,11 @@ impl<'tf> ToyForth<'tf> {
                     pc += 1;
                 },
 
-                Instr::Prim(Primitive::DoCol(new_pc)) => {
+                Instr::DoCol(new_pc) => {
                     self.rstack.push(Word::xt(pc+1));
                     pc = new_pc.0;
                 },
-                Instr::Prim(Primitive::Unnest) => {
+                Instr::Unnest => {
                     let val = self.rstack.pop().ok_or(ForthError::ReturnStackUnderflow)?;
                     let ret = val.to_xt().ok_or_else(|| ForthError::InvalidExecutionToken(val))?;
                     pc = ret.0;
@@ -1972,12 +1966,12 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let code = vec![
-            Instr::Prim(Primitive::Push(Word::int(4314))),
-            Instr::Prim(Primitive::Push(Word::int(-132))),
-            Instr::Prim(Primitive::Push(Word::int(-999))),
-            Instr::Prim(Primitive::Swap),
-            Instr::Prim(Primitive::Drop),
-            Instr::Prim(Primitive::Bye),
+            Instr::Push(Word::int(4314)),
+            Instr::Push(Word::int(-132)),
+            Instr::Push(Word::int(-999)),
+            Instr::Swap,
+            Instr::Drop,
+            Instr::Bye,
         ];
 
         let xt = forth.add_code(&code);
@@ -1993,12 +1987,12 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let code = vec![
-            Instr::Prim(Primitive::Push(Word::int(4314))),
-            Instr::Prim(Primitive::Push(Word::int(-132))),
-            Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
-            Instr::Prim(Primitive::Push(Word::int(-10))),
-            Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
-            Instr::Prim(Primitive::Bye),
+            Instr::Push(Word::int(4314)),
+            Instr::Push(Word::int(-132)),
+            Instr::BinaryOp(BinOp::Plus),
+            Instr::Push(Word::int(-10)),
+            Instr::BinaryOp(BinOp::Star),
+            Instr::Bye,
         ];
 
         let xt = forth.add_code(&code);
@@ -2017,16 +2011,16 @@ mod tests {
         assert_eq!(entries.len(), 5);
 
         /* f(x) = 2*x + 1 */
-        entries[0] = Instr::Prim(Primitive::Push(Word::int(2)));
-        entries[1] = Instr::Prim(Primitive::BinaryOp(BinOp::Star));
-        entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
-        entries[3] = Instr::Prim(Primitive::BinaryOp(BinOp::Plus));
-        entries[4] = Instr::Prim(Primitive::Unnest);
+        entries[0] = Instr::Push(Word::int(2));
+        entries[1] = Instr::BinaryOp(BinOp::Star);
+        entries[2] = Instr::Push(Word::int(1));
+        entries[3] = Instr::BinaryOp(BinOp::Plus);
+        entries[4] = Instr::Unnest;
 
         let xt1 = forth.add_code(&vec![
-            Instr::Prim(Primitive::Push(Word::int(2))),
-            Instr::Prim(Primitive::DoCol(xt0)),
-            Instr::Prim(Primitive::Bye),
+            Instr::Push(Word::int(2)),
+            Instr::DoCol(xt0),
+            Instr::Bye,
         ]);
 
         forth.exec(xt1).unwrap();
@@ -2042,11 +2036,11 @@ mod tests {
         assert_eq!(entries.len(), 5);
 
         /* f(x) = 2*x + 1 */
-        entries[0] = Instr::Prim(Primitive::Push(Word::int(2)));
-        entries[1] = Instr::Prim(Primitive::BinaryOp(BinOp::Star));
-        entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
-        entries[3] = Instr::Prim(Primitive::BinaryOp(BinOp::Plus));
-        entries[4] = Instr::Prim(Primitive::Unnest);
+        entries[0] = Instr::Push(Word::int(2));
+        entries[1] = Instr::BinaryOp(BinOp::Star);
+        entries[2] = Instr::Push(Word::int(1));
+        entries[3] = Instr::BinaryOp(BinOp::Plus);
+        entries[4] = Instr::Unnest;
 
         forth.define_word("my_func", xt).unwrap();
 
@@ -2061,11 +2055,11 @@ mod tests {
         let xt = forth.mark_cell();
 
         /* f(x) = 2*x + 1 */
-        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(2))));
-        forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Star)));
-        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
-        forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Plus)));
-        forth.push_cell(Instr::Prim(Primitive::Unnest));
+        forth.push_cell(Instr::Push(Word::int(2)));
+        forth.push_cell(Instr::BinaryOp(BinOp::Star));
+        forth.push_cell(Instr::Push(Word::int(1)));
+        forth.push_cell(Instr::BinaryOp(BinOp::Plus));
+        forth.push_cell(Instr::Unnest);
 
         forth.define_word("my_func", xt).unwrap();
 
@@ -2074,10 +2068,10 @@ mod tests {
 
         let immed = forth.mark_cell();
 
-        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(0))));
-        forth.push_cell(Instr::Prim(Primitive::EOL));
-        forth.push_cell(Instr::Prim(Primitive::Lookup));
-        forth.push_cell(Instr::Prim(Primitive::Bye));
+        forth.push_cell(Instr::Push(Word::int(0)));
+        forth.push_cell(Instr::EOL);
+        forth.push_cell(Instr::Lookup);
+        forth.push_cell(Instr::Bye);
 
         forth.input.push_str("my_func");
         forth.exec(immed).unwrap();
@@ -2093,22 +2087,22 @@ mod tests {
         let xt = forth.mark_cell();
 
         /* f(x) = 2*x + 1 */
-        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(2))));
-        forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Star)));
-        forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
-        forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Plus)));
-        forth.push_cell(Instr::Prim(Primitive::Unnest));
+        forth.push_cell(Instr::Push(Word::int(2)));
+        forth.push_cell(Instr::BinaryOp(BinOp::Star));
+        forth.push_cell(Instr::Push(Word::int(1)));
+        forth.push_cell(Instr::BinaryOp(BinOp::Plus));
+        forth.push_cell(Instr::Unnest);
 
         forth.input.push_str("my_func");
 
         {
             let immed = forth.mark_cell();
-            forth.push_cell(Instr::Prim(Primitive::Push(Word::int(0))));
-            forth.push_cell(Instr::Prim(Primitive::EOL));
-            forth.push_cell(Instr::Prim(Primitive::DefStr));
-            forth.push_cell(Instr::Prim(Primitive::Push(Word::from_xt(xt))));
-            forth.push_cell(Instr::Prim(Primitive::DefWord));
-            forth.push_cell(Instr::Prim(Primitive::Bye));
+            forth.push_cell(Instr::Push(Word::int(0)));
+            forth.push_cell(Instr::EOL);
+            forth.push_cell(Instr::DefStr);
+            forth.push_cell(Instr::Push(Word::from_xt(xt)));
+            forth.push_cell(Instr::DefWord);
+            forth.push_cell(Instr::Bye);
 
             forth.exec(immed).unwrap();
         }
@@ -2116,10 +2110,10 @@ mod tests {
         {
             let immed = forth.mark_cell();
 
-            forth.push_cell(Instr::Prim(Primitive::Push(Word::int(0))));
-            forth.push_cell(Instr::Prim(Primitive::EOL));
-            forth.push_cell(Instr::Prim(Primitive::Lookup));
-            forth.push_cell(Instr::Prim(Primitive::Bye));
+            forth.push_cell(Instr::Push(Word::int(0)));
+            forth.push_cell(Instr::EOL);
+            forth.push_cell(Instr::Lookup);
+            forth.push_cell(Instr::Bye);
 
             forth.exec(immed).unwrap();
         }
@@ -2285,11 +2279,11 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let xt = forth.add_word("my_func", &vec![
-           Instr::Prim(Primitive::Push(Word::int(2))),
-           Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
-           Instr::Prim(Primitive::Push(Word::int(1))),
-           Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
-           Instr::Prim(Primitive::Unnest),
+           Instr::Push(Word::int(2)),
+           Instr::BinaryOp(BinOp::Star),
+           Instr::Push(Word::int(1)),
+           Instr::BinaryOp(BinOp::Plus),
+           Instr::Unnest,
         ]).unwrap();
 
         // look up various things
@@ -2333,11 +2327,11 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let xt = forth.add_word("my_func", &vec![
-           Instr::Prim(Primitive::Push(Word::int(2))),
-           Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
-           Instr::Prim(Primitive::Push(Word::int(1))),
-           Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
-           Instr::Prim(Primitive::Unnest),
+           Instr::Push(Word::int(2)),
+           Instr::BinaryOp(BinOp::Star),
+           Instr::Push(Word::int(1)),
+           Instr::BinaryOp(BinOp::Plus),
+           Instr::Unnest,
         ]).unwrap();
 
         // look up various things
@@ -2384,11 +2378,11 @@ mod tests {
         let mut forth = ToyForth::new();
 
         forth.add_word("my_func", &vec![
-           Instr::Prim(Primitive::Push(Word::int(2))),
-           Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
-           Instr::Prim(Primitive::Push(Word::int(1))),
-           Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
-           Instr::Prim(Primitive::Unnest),
+           Instr::Push(Word::int(2)),
+           Instr::BinaryOp(BinOp::Star),
+           Instr::Push(Word::int(1)),
+           Instr::BinaryOp(BinOp::Plus),
+           Instr::Unnest,
         ]).unwrap();
 
         forth.push_int(1234).unwrap();
@@ -2421,8 +2415,8 @@ mod tests {
     fn can_interpret_two_words() {
         let mut forth = ToyForth::new();
 
-        forth.add_primitive("ONE", Primitive::Push(Word::int(1))).unwrap();
-        forth.add_primitive("TWO", Primitive::Push(Word::int(2))).unwrap();
+        forth.add_primitive("ONE", Instr::Push(Word::int(1))).unwrap();
+        forth.add_primitive("TWO", Instr::Push(Word::int(2))).unwrap();
 
         forth.interpret("ONE DUP").unwrap();
         assert_eq!(forth.stack_depth(), 2);
@@ -2631,7 +2625,7 @@ mod tests {
         let foo_xt = forth.lookup_word("foo").unwrap();
         for (i,instr) in forth.code[foo_xt.0 as usize..].iter().enumerate() {
             eprintln!("[{:3}] {:?}", i, instr);
-            if let Instr::Prim(Primitive::Unnest) = *instr {
+            if let Instr::Unnest = *instr {
                 break
             }
         }
