@@ -298,7 +298,7 @@ enum Primitive {
     Dup,
     Swap,
     Over,
-    BinOp(BinOp),
+    BinaryOp(BinOp),
     Branch(i32),
     BranchOnZero(i32),  // branches if stack top is 0
     EOL,
@@ -484,17 +484,17 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("SWAP", Primitive::Swap);
         tf.add_prim("OVER", Primitive::Over);
 
-        tf.add_prim("+", Primitive::BinOp(BinOp::Plus));
-        tf.add_prim("-", Primitive::BinOp(BinOp::Minus));
-        tf.add_prim("*", Primitive::BinOp(BinOp::Star));
-        tf.add_prim("/", Primitive::BinOp(BinOp::Slash));
+        tf.add_prim("+", Primitive::BinaryOp(BinOp::Plus));
+        tf.add_prim("-", Primitive::BinaryOp(BinOp::Minus));
+        tf.add_prim("*", Primitive::BinaryOp(BinOp::Star));
+        tf.add_prim("/", Primitive::BinaryOp(BinOp::Slash));
 
         // tf.add_prim("NEGATE", Primitive::BinOp{op:MATH_NEGATE});
 
-        tf.add_prim(">", Primitive::BinOp(BinOp::Greater));
-        tf.add_prim("<", Primitive::BinOp(BinOp::Less));
-        tf.add_prim("=", Primitive::BinOp(BinOp::Equal));
-        tf.add_prim("<>", Primitive::BinOp(BinOp::NotEqual));
+        tf.add_prim(">", Primitive::BinaryOp(BinOp::Greater));
+        tf.add_prim("<", Primitive::BinaryOp(BinOp::Less));
+        tf.add_prim("=", Primitive::BinaryOp(BinOp::Equal));
+        tf.add_prim("<>", Primitive::BinaryOp(BinOp::NotEqual));
 
         // words that may be replaced with Forth definitions at some point
         tf.add_prim("BL", Primitive::Push(Word::int(' ' as i32)));
@@ -1107,7 +1107,7 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    fn binop(&mut self, op: BinOp) -> Result<(),ForthError> {
+    fn binary_op(&mut self, op: BinOp) -> Result<(),ForthError> {
         let b = self.pop_int()?;
         let a = self.pop_int()?;
 
@@ -1127,9 +1127,6 @@ impl<'tf> ToyForth<'tf> {
             BinOp::Less     => { self.push(Word::int(if a<b { 1 } else { 0 }))?; },
             BinOp::Equal    => { self.push(Word::int(if a==b { 1 } else { 0 }))?; },
             BinOp::NotEqual => { self.push(Word::int(if a != b { 1 } else { 0 }))?; },
-            _ => {
-                return Err(ForthError::InvalidOperation);
-            }
         }
 
         return Ok(());
@@ -1743,8 +1740,8 @@ impl<'tf> ToyForth<'tf> {
                         pc += 1;
                     }
                 },
-                Instr::Prim(Primitive::BinOp(op)) => {
-                    self.binop(op)?;
+                Instr::Prim(Primitive::BinaryOp(op)) => {
+                    self.binary_op(op)?;
                     pc += 1;
                 },
                 Instr::Prim(Primitive::EOL) => {
@@ -1949,9 +1946,9 @@ mod tests {
         let code = vec![
             Instr::Prim(Primitive::Push(Word::int(4314))),
             Instr::Prim(Primitive::Push(Word::int(-132))),
-            Instr::Prim(Primitive::BinOp(BinOp::Plus)),
+            Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
             Instr::Prim(Primitive::Push(Word::int(-10))),
-            Instr::Prim(Primitive::BinOp(BinOp::Star)),
+            Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
             Instr::Prim(Primitive::Bye),
         ];
 
@@ -1972,9 +1969,9 @@ mod tests {
 
         /* f(x) = 2*x + 1 */
         entries[0] = Instr::Prim(Primitive::Push(Word::int(2)));
-        entries[1] = Instr::Prim(Primitive::BinOp(BinOp::Star));
+        entries[1] = Instr::Prim(Primitive::BinaryOp(BinOp::Star));
         entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
-        entries[3] = Instr::Prim(Primitive::BinOp(BinOp::Plus));
+        entries[3] = Instr::Prim(Primitive::BinaryOp(BinOp::Plus));
         entries[4] = Instr::Unnest;
 
         let xt1 = forth.add_code(&vec![
@@ -1997,9 +1994,9 @@ mod tests {
 
         /* f(x) = 2*x + 1 */
         entries[0] = Instr::Prim(Primitive::Push(Word::int(2)));
-        entries[1] = Instr::Prim(Primitive::BinOp(BinOp::Star));
+        entries[1] = Instr::Prim(Primitive::BinaryOp(BinOp::Star));
         entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
-        entries[3] = Instr::Prim(Primitive::BinOp(BinOp::Plus));
+        entries[3] = Instr::Prim(Primitive::BinaryOp(BinOp::Plus));
         entries[4] = Instr::Unnest;
 
         forth.define_word("my_func", xt).unwrap();
@@ -2016,9 +2013,9 @@ mod tests {
 
         /* f(x) = 2*x + 1 */
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(2))));
-        forth.push_cell(Instr::Prim(Primitive::BinOp(BinOp::Star)));
+        forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Star)));
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
-        forth.push_cell(Instr::Prim(Primitive::BinOp(BinOp::Plus)));
+        forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Plus)));
         forth.push_cell(Instr::Unnest);
 
         forth.define_word("my_func", xt).unwrap();
@@ -2048,9 +2045,9 @@ mod tests {
 
         /* f(x) = 2*x + 1 */
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(2))));
-        forth.push_cell(Instr::Prim(Primitive::BinOp(BinOp::Star)));
+        forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Star)));
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
-        forth.push_cell(Instr::Prim(Primitive::BinOp(BinOp::Plus)));
+        forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Plus)));
         forth.push_cell(Instr::Unnest);
 
         forth.input.push_str("my_func");
@@ -2240,9 +2237,9 @@ mod tests {
 
         let xt = forth.add_word("my_func", &vec![
            Instr::Prim(Primitive::Push(Word::int(2))),
-           Instr::Prim(Primitive::BinOp(BinOp::Star)),
+           Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
            Instr::Prim(Primitive::Push(Word::int(1))),
-           Instr::Prim(Primitive::BinOp(BinOp::Plus)),
+           Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
            Instr::Unnest,
         ]).unwrap();
 
@@ -2288,9 +2285,9 @@ mod tests {
 
         let xt = forth.add_word("my_func", &vec![
            Instr::Prim(Primitive::Push(Word::int(2))),
-           Instr::Prim(Primitive::BinOp(BinOp::Star)),
+           Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
            Instr::Prim(Primitive::Push(Word::int(1))),
-           Instr::Prim(Primitive::BinOp(BinOp::Plus)),
+           Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
            Instr::Unnest,
         ]).unwrap();
 
@@ -2339,9 +2336,9 @@ mod tests {
 
         forth.add_word("my_func", &vec![
            Instr::Prim(Primitive::Push(Word::int(2))),
-           Instr::Prim(Primitive::BinOp(BinOp::Star)),
+           Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
            Instr::Prim(Primitive::Push(Word::int(1))),
-           Instr::Prim(Primitive::BinOp(BinOp::Plus)),
+           Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
            Instr::Unnest,
         ]).unwrap();
 
