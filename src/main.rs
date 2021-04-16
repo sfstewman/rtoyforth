@@ -1,14 +1,3 @@
-const MAX_STRING_LENGTH : usize = 256;
-
-const WORD_HIGH_BIT : u32 = 0x8000_0000;
-const WORD_SIGN_BIT : u32 = 0x4000_0000;
-const WORD_INT_MASK : u32 = 0x7fff_ffff;
-
-const WORD_XT_MASK  : u32 = 0x1fff_ffff;
-const WORD_STR_MASK : u32 = 0x3fff_ffff;
-const WORD_XT_BITS  : u32 = WORD_HIGH_BIT | WORD_SIGN_BIT;
-const WORD_STR_BITS : u32 = WORD_HIGH_BIT;
-
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 struct Word(u32);
 
@@ -62,6 +51,8 @@ enum ST {
 }
 
 impl ST {
+    const MAX_LENGTH : usize = 256;
+
     const MAX : u32 = 0x3fff_ffff;
     const MIN : u32 = 0;
     const MASK : u32 = 0x3fff_ffff;
@@ -198,19 +189,32 @@ impl Word {
     const INT_MIN  : i32 = -1073741824;
     const INT_MAX  : i32 =  1073741823;
 
+    const XT_MASK  : u32 = 0x1fff_ffff;
+    const STR_MASK : u32 = 0x3fff_ffff;
+    const XT_BITS  : u32 = Word::HIGH_BIT | Word::SIGN_BIT;
+    const STR_BITS : u32 = Word::HIGH_BIT;
+
+    fn true_value() -> Word {
+        Word(Word::INT_MASK)
+    }
+
+    fn false_value() -> Word {
+        Word(0)
+    }
+
     fn int(x: i32) -> Word {
         // TODO: range check
-        Word((x as u32) & WORD_INT_MASK)
+        Word((x as u32) & Word::INT_MASK)
     }
 
     fn xt(x: u32) -> Word {
         // TODO: range check
-        Word((x & WORD_XT_MASK) | WORD_XT_BITS)
+        Word((x & Word::XT_MASK) | Word::XT_BITS)
     }
 
     fn str(x: u32) -> Word {
         // TODO: range check
-        Word((x & WORD_STR_MASK) | WORD_STR_BITS)
+        Word((x & Word::STR_MASK) | Word::STR_BITS)
     }
 
     fn addr(x: u32) -> Word {
@@ -231,15 +235,15 @@ impl Word {
 
     pub fn kind(self) -> WordKind {
         match self.0 {
-            x if (x & WORD_HIGH_BIT) == 0 => { WordKind::Int((x | ((x & WORD_SIGN_BIT) << 1)) as i32) },
-            x if (x & WORD_SIGN_BIT) == 0 => {
+            x if (x & Word::HIGH_BIT) == 0 => { WordKind::Int((x | ((x & Word::SIGN_BIT) << 1)) as i32) },
+            x if (x & Word::SIGN_BIT) == 0 => {
                 // FIXME: unwrap!
                 WordKind::Str(ST::from_u32(x).unwrap())
             },
             x if (x & Addr::ADDR_BIT) != 0 => {
                 WordKind::Addr(Addr(x & Addr::MASK))
             }
-            x => { WordKind::XT(XT(x & WORD_XT_MASK)) },
+            x => { WordKind::XT(XT(x & Word::XT_MASK)) },
         }
     }
 
@@ -940,7 +944,7 @@ impl<'tf> ToyForth<'tf> {
     fn add_string_to_pool(strings: &mut std::vec::Vec<u8>, s: &str) -> Result<ST,ForthError> {
         let b = s.as_bytes();
 
-        if b.len() > MAX_STRING_LENGTH {
+        if b.len() > ST::MAX_LENGTH {
             return Err(ForthError::StringTooLong);
         }
 
