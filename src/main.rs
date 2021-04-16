@@ -774,7 +774,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn add_primitive(&mut self, word: &str, prim: Instr) -> Result<XT,ForthError> {
-        let st = self.push_string(word)?;
+        let st = self.add_string(word)?;
 
         let xt = self.mark_code();
         self.add_instr(prim);
@@ -801,7 +801,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<XT,ForthError> {
-        self.push_string(word)?;
+        self.add_string(word)?;
         let func_ind = self.ufuncs.len();
 
         if func_ind > 0xffff_ffff {
@@ -827,11 +827,11 @@ impl<'tf> ToyForth<'tf> {
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
 
-        self.push_string(&s)
+        self.add_string(&s)
     }
 
     pub fn define_word(&mut self, word: &str, xt: XT) -> Result<ST,ForthError> {
-        let st = self.push_string(word)?;
+        let st = self.add_string(word)?;
 
         self.dict.push(DictEntry{
             st: st,
@@ -937,7 +937,7 @@ impl<'tf> ToyForth<'tf> {
         return Ok(ST::word_space(0, len));
     }
 
-    fn push_str(strings: &mut std::vec::Vec<u8>, s: &str) -> Result<ST,ForthError> {
+    fn add_string_to_pool(strings: &mut std::vec::Vec<u8>, s: &str) -> Result<ST,ForthError> {
         let b = s.as_bytes();
 
         if b.len() > MAX_STRING_LENGTH {
@@ -960,8 +960,8 @@ impl<'tf> ToyForth<'tf> {
         return Ok(ST::allocated_space(off as u32, blen))
     }
 
-    pub fn push_string(&mut self, s: &str) -> Result<ST,ForthError> {
-        ToyForth::push_str(&mut self.strings, s)
+    pub fn add_string(&mut self, s: &str) -> Result<ST,ForthError> {
+        ToyForth::add_string_to_pool(&mut self.strings, s)
     }
 
     pub fn bytes_at(&self, st: ST) -> &[u8] {
@@ -1354,7 +1354,7 @@ impl<'tf> ToyForth<'tf> {
 
         // TODO: bounds checks?
         let s = &self.input[i0 as usize..i1 as usize];
-        match ToyForth::push_str(&mut self.strings, s) {
+        match ToyForth::add_string_to_pool(&mut self.strings, s) {
             Ok(st) => {
                 self.push(Word::from_str(st))?;
                 Ok(())
@@ -1471,7 +1471,7 @@ impl<'tf> ToyForth<'tf> {
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        let st = self.push_string(&s)?;
+        let st = self.add_string(&s)?;
 
         // XXX: check that STATE==0, /CDEF and /CXT are not set
         self.set_var_at(ToyForth::ADDR_SLASH_CDEF, st.to_word())?;
@@ -1948,8 +1948,8 @@ mod tests {
         let mut forth = ToyForth::new();
         let base = forth.char_here();
 
-        let st1 = forth.push_string("string1").unwrap();
-        let st2 = forth.push_string("string2").unwrap();
+        let st1 = forth.add_string("string1").unwrap();
+        let st2 = forth.add_string("string2").unwrap();
 
         assert_eq!(forth.string_at(st1), "string1");
         assert_eq!(forth.string_at(st2), "string2");
@@ -2073,7 +2073,7 @@ mod tests {
         forth.add_instr(Instr::Lookup);
         forth.add_instr(Instr::Bye);
 
-        forth.input.push_str("my_func");
+        forth.set_input("my_func");
         forth.exec(immed).unwrap();
 
         assert_eq!(forth.pop().unwrap(), Word::from_xt(xt));
@@ -2093,7 +2093,7 @@ mod tests {
         forth.add_instr(Instr::BinaryOp(BinOp::Plus));
         forth.add_instr(Instr::Unnest);
 
-        forth.input.push_str("my_func");
+        forth.set_input("my_func");
 
         {
             let immed = forth.mark_code();
@@ -2126,8 +2126,7 @@ mod tests {
     fn builtin_word_scans_words() {
         let mut forth = ToyForth::new();
 
-        forth.input.push_str("  x  test foo bar   ");
-        forth.input_off = 0;
+        forth.set_input("  x  test foo bar   ");
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
@@ -2199,8 +2198,7 @@ mod tests {
     fn builtin_parse_scans_words() {
         let mut forth = ToyForth::new();
 
-        forth.input.push_str("  x  test foo bar   ");
-        forth.input_off = 0;
+        forth.set_input("  x  test foo bar   ");
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
@@ -2244,8 +2242,7 @@ mod tests {
     fn builtin_char_scans_first_char_of_words() {
         let mut forth = ToyForth::new();
 
-        forth.input.push_str("  x  test foo bar   ");
-        forth.input_off = 0;
+        forth.set_input("  x  test foo bar   ");
 
         forth.builtin_char().unwrap();
         assert_eq!(forth.input_off, 3);
@@ -2429,7 +2426,7 @@ mod tests {
         let mut forth = ToyForth::new();
 
         forth.push_int(0).unwrap();
-        let st = forth.push_string("123").unwrap();
+        let st = forth.add_string("123").unwrap();
         forth.push(Word::from_str(st)).unwrap();
         forth.push_int(3).unwrap();
         forth.builtin_to_number().unwrap();
@@ -2440,7 +2437,7 @@ mod tests {
         assert_eq!(forth.pop_int().unwrap(), 123);
 
         forth.push_int(0).unwrap();
-        let st = forth.push_string("54a3").unwrap();
+        let st = forth.add_string("54a3").unwrap();
         forth.push(Word::from_str(st)).unwrap();
         forth.push_int(4).unwrap();
         forth.builtin_to_number().unwrap();
