@@ -307,7 +307,8 @@ enum Primitive {
     DefStr,
     DefWord,
     Func(u32),
-    // Immediate,
+    DoCol(XT),
+    Unnest,
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -333,12 +334,10 @@ enum BinOp {
 enum Instr {
     Empty,
     Prim(Primitive),
-    DoCol(XT),
     Special(),
     Data(Word),
     // Char{bytes:[u8;std::mem::size_of::<Word>()]},
     Execute,
-    Unnest,
 }
 
 #[derive(Debug,Clone,Copy)]
@@ -661,7 +660,7 @@ impl<'tf> ToyForth<'tf> {
                     self.ret_push_bye()?;
                     self.exec(xt)?;
                 } else {
-                    self.push_cell(Instr::DoCol(xt));
+                    self.push_cell(Instr::Prim(Primitive::DoCol(xt)));
                 }
             }
         }
@@ -789,7 +788,7 @@ impl<'tf> ToyForth<'tf> {
 
         let xt = self.mark_cell();
         self.push_cell(Instr::Prim(prim));
-        self.push_cell(Instr::Unnest);
+        self.push_cell(Instr::Prim(Primitive::Unnest));
 
         self.dict.push(DictEntry{
             st: st,
@@ -1446,7 +1445,7 @@ impl<'tf> ToyForth<'tf> {
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        self.add_word(&s, &[ Instr::Prim(Primitive::Push(w)), Instr::Unnest ])?;
+        self.add_word(&s, &[ Instr::Prim(Primitive::Push(w)), Instr::Prim(Primitive::Unnest) ])?;
 
         Ok(())
     }
@@ -1465,7 +1464,7 @@ impl<'tf> ToyForth<'tf> {
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        self.add_word(&s, &[ Instr::Prim(Primitive::Push(addr.to_word())), Instr::Unnest ])?;
+        self.add_word(&s, &[ Instr::Prim(Primitive::Push(addr.to_word())), Instr::Prim(Primitive::Unnest) ])?;
 
         Ok(())
     }
@@ -1501,7 +1500,7 @@ impl<'tf> ToyForth<'tf> {
 
         eprintln!("SEMI: COMPILING");
 
-        self.push_cell(Instr::Unnest);
+        self.push_cell(Instr::Prim(Primitive::Unnest));
         let st = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?.to_str().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
         let xt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?.to_xt().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
 
@@ -1833,7 +1832,7 @@ impl<'tf> ToyForth<'tf> {
                     pc += 1;
                 },
 
-                Instr::DoCol(new_pc) => {
+                Instr::Prim(Primitive::DoCol(new_pc)) => {
                     self.rstack.push(Word::xt(pc+1));
                     pc = new_pc.0;
                 },
@@ -1842,7 +1841,7 @@ impl<'tf> ToyForth<'tf> {
                     self.rstack.push(Word::xt(pc+1));
                     pc = xt.0;
                 },
-                Instr::Unnest => {
+                Instr::Prim(Primitive::Unnest) => {
                     let val = self.rstack.pop().ok_or(ForthError::ReturnStackUnderflow)?;
                     let ret = val.to_xt().ok_or_else(|| ForthError::InvalidExecutionToken(val))?;
                     pc = ret.0;
@@ -2032,11 +2031,11 @@ mod tests {
         entries[1] = Instr::Prim(Primitive::BinaryOp(BinOp::Star));
         entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
         entries[3] = Instr::Prim(Primitive::BinaryOp(BinOp::Plus));
-        entries[4] = Instr::Unnest;
+        entries[4] = Instr::Prim(Primitive::Unnest);
 
         let xt1 = forth.add_code(&vec![
             Instr::Prim(Primitive::Push(Word::int(2))),
-            Instr::DoCol(xt0),
+            Instr::Prim(Primitive::DoCol(xt0)),
             Instr::Prim(Primitive::Bye),
         ]);
 
@@ -2057,7 +2056,7 @@ mod tests {
         entries[1] = Instr::Prim(Primitive::BinaryOp(BinOp::Star));
         entries[2] = Instr::Prim(Primitive::Push(Word::int(1)));
         entries[3] = Instr::Prim(Primitive::BinaryOp(BinOp::Plus));
-        entries[4] = Instr::Unnest;
+        entries[4] = Instr::Prim(Primitive::Unnest);
 
         forth.define_word("my_func", xt).unwrap();
 
@@ -2076,7 +2075,7 @@ mod tests {
         forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Star)));
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
         forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Plus)));
-        forth.push_cell(Instr::Unnest);
+        forth.push_cell(Instr::Prim(Primitive::Unnest));
 
         forth.define_word("my_func", xt).unwrap();
 
@@ -2108,7 +2107,7 @@ mod tests {
         forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Star)));
         forth.push_cell(Instr::Prim(Primitive::Push(Word::int(1))));
         forth.push_cell(Instr::Prim(Primitive::BinaryOp(BinOp::Plus)));
-        forth.push_cell(Instr::Unnest);
+        forth.push_cell(Instr::Prim(Primitive::Unnest));
 
         forth.input.push_str("my_func");
 
@@ -2300,7 +2299,7 @@ mod tests {
            Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
            Instr::Prim(Primitive::Push(Word::int(1))),
            Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
-           Instr::Unnest,
+           Instr::Prim(Primitive::Unnest),
         ]).unwrap();
 
         // look up various things
@@ -2348,7 +2347,7 @@ mod tests {
            Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
            Instr::Prim(Primitive::Push(Word::int(1))),
            Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
-           Instr::Unnest,
+           Instr::Prim(Primitive::Unnest),
         ]).unwrap();
 
         // look up various things
@@ -2399,7 +2398,7 @@ mod tests {
            Instr::Prim(Primitive::BinaryOp(BinOp::Star)),
            Instr::Prim(Primitive::Push(Word::int(1))),
            Instr::Prim(Primitive::BinaryOp(BinOp::Plus)),
-           Instr::Unnest,
+           Instr::Prim(Primitive::Unnest),
         ]).unwrap();
 
         forth.push_int(1234).unwrap();
@@ -2642,7 +2641,7 @@ mod tests {
         let foo_xt = forth.lookup_word("foo").unwrap();
         for (i,instr) in forth.code[foo_xt.0 as usize..].iter().enumerate() {
             eprintln!("[{:3}] {:?}", i, instr);
-            if *instr == Instr::Unnest {
+            if let Instr::Prim(Primitive::Unnest) = *instr {
                 break
             }
         }
