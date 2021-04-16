@@ -1595,7 +1595,8 @@ impl<'tf> ToyForth<'tf> {
 
     fn builtin_char_at(&mut self) -> Result<(), ForthError> {
         let st = self.pop_str()?;
-        self.push_int(self.bytes_at(st)[0] as i32)?;
+        let b = *self.bytes_at(st).first().ok_or(ForthError::InvalidEmptyString)?;
+        self.push_int(b as i32)?;
         Ok(())
     }
 
