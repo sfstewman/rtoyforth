@@ -34,11 +34,6 @@ impl Addr {
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 struct ScratchLoc{len:u8, off:u8}
 
-/*
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
-struct AllocLoc(u32);
-*/
-
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 enum ST {
     // TODO: Check size.  This needs to fit in 32 bits.
