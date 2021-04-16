@@ -717,14 +717,10 @@ impl<'tf> ToyForth<'tf> {
         //   3) Allow different input sources (eg: files)
         //
         loop {
-            self.write_prompt(prompt)?;
+            if !self.compiling() {
+                self.write_prompt(prompt)?;
+            }
             self.builtin_refill()?;
-
-            /*
-            line.clear();
-            r.read_line(&mut line)?;
-            // println!("line is: {}", line);
-            */
 
             if self.input.is_empty() {
                 break
