@@ -472,7 +472,7 @@ impl<'tf> ToyForth<'tf> {
         };
 
         // First word in dict (addr 0) always holds BYE
-        tf.push_cell(Instr::Bye);
+        tf.add_instr(Instr::Bye);
 
         // set up standard dictionary
         tf.add_prim("BYE", Instr::Bye);
@@ -642,7 +642,7 @@ impl<'tf> ToyForth<'tf> {
 
                 if is_compiling {
                     let num = self.pop_int()?;
-                    self.push_cell(Instr::Push(Word::int(num)));
+                    self.add_instr(Instr::Push(Word::int(num)));
                 }
             } else {
                 let xt = self.pop_xt()?;
@@ -650,7 +650,7 @@ impl<'tf> ToyForth<'tf> {
                     self.ret_push_bye()?;
                     self.exec(xt)?;
                 } else {
-                    self.push_cell(Instr::DoCol(xt));
+                    self.add_instr(Instr::DoCol(xt));
                 }
             }
         }
@@ -776,9 +776,9 @@ impl<'tf> ToyForth<'tf> {
     pub fn add_primitive(&mut self, word: &str, prim: Instr) -> Result<XT,ForthError> {
         let st = self.push_string(word)?;
 
-        let xt = self.mark_cell();
-        self.push_cell(prim);
-        self.push_cell(Instr::Unnest);
+        let xt = self.mark_code();
+        self.add_instr(prim);
+        self.add_instr(Instr::Unnest);
 
         self.dict.push(DictEntry{
             st: st,
@@ -814,9 +814,9 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn add_word(&mut self, word: &str, code: &[Instr]) -> Result<XT,ForthError> {
-        let xt = self.mark_cell();
+        let xt = self.mark_code();
         for instr in code {
-            self.push_cell(*instr);
+            self.add_instr(*instr);
         }
 
         self.define_word(word,xt)?;
@@ -878,7 +878,7 @@ impl<'tf> ToyForth<'tf> {
         return (xt, &mut self.code[ind..]);
     }
 
-    pub fn mark_cell(&self) -> XT {
+    pub fn mark_code(&self) -> XT {
         let ind = self.code.len();
 
         if ind >= XT::MAX as usize {
@@ -889,7 +889,7 @@ impl<'tf> ToyForth<'tf> {
         return XT(ind as u32);
     }
 
-    pub fn push_cell(&mut self, code: Instr) -> XT {
+    pub fn add_instr(&mut self, code: Instr) -> XT {
         let ind = self.code.len();
 
         if ind >= XT::MAX as usize {
@@ -1476,7 +1476,7 @@ impl<'tf> ToyForth<'tf> {
         // XXX: check that STATE==0, /CDEF and /CXT are not set
         self.set_var_at(ToyForth::ADDR_SLASH_CDEF, st.to_word())?;
 
-        let xt = self.mark_cell();
+        let xt = self.mark_code();
         self.set_var_at(ToyForth::ADDR_SLASH_CXT, xt.to_word())?;
         self.set_var_at(ToyForth::ADDR_STATE, Word::int(1))?;
 
@@ -1490,7 +1490,7 @@ impl<'tf> ToyForth<'tf> {
 
         eprintln!("SEMI: COMPILING");
 
-        self.push_cell(Instr::Unnest);
+        self.add_instr(Instr::Unnest);
         let st = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?.to_str().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
         let xt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?.to_xt().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
 
@@ -1516,7 +1516,7 @@ impl<'tf> ToyForth<'tf> {
         }
 
         // add branch, fixup cstack reference later
-        let xt = self.push_cell(Instr::BranchOnZero(0));
+        let xt = self.add_instr(Instr::BranchOnZero(0));
         self.cstack.push(xt);
 
         Ok(())
@@ -1527,7 +1527,7 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::InvalidCompilerWord);
         }
 
-        let xt = self.mark_cell();
+        let xt = self.mark_code();
         let if_else_xt = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
 
         // XXX: check for overflow
@@ -1554,9 +1554,9 @@ impl<'tf> ToyForth<'tf> {
         }
 
         let if_xt = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
-        let else_xt = self.push_cell(Instr::Branch(0));
+        let else_xt = self.add_instr(Instr::Branch(0));
 
-        let xt = self.mark_cell();
+        let xt = self.mark_code();
         self.cstack.push(else_xt);
 
         let delta : i32 = ((xt.0 as i64) - (if_xt.0 as i64)) as i32;
@@ -2052,26 +2052,26 @@ mod tests {
     fn can_define_incrementally() {
         let mut forth = ToyForth::new();
 
-        let xt = forth.mark_cell();
+        let xt = forth.mark_code();
 
         /* f(x) = 2*x + 1 */
-        forth.push_cell(Instr::Push(Word::int(2)));
-        forth.push_cell(Instr::BinaryOp(BinOp::Star));
-        forth.push_cell(Instr::Push(Word::int(1)));
-        forth.push_cell(Instr::BinaryOp(BinOp::Plus));
-        forth.push_cell(Instr::Unnest);
+        forth.add_instr(Instr::Push(Word::int(2)));
+        forth.add_instr(Instr::BinaryOp(BinOp::Star));
+        forth.add_instr(Instr::Push(Word::int(1)));
+        forth.add_instr(Instr::BinaryOp(BinOp::Plus));
+        forth.add_instr(Instr::Unnest);
 
         forth.define_word("my_func", xt).unwrap();
 
         let lookup_xt = forth.lookup_word("my_func").unwrap();
         assert_eq!(xt, lookup_xt);
 
-        let immed = forth.mark_cell();
+        let immed = forth.mark_code();
 
-        forth.push_cell(Instr::Push(Word::int(0)));
-        forth.push_cell(Instr::EOL);
-        forth.push_cell(Instr::Lookup);
-        forth.push_cell(Instr::Bye);
+        forth.add_instr(Instr::Push(Word::int(0)));
+        forth.add_instr(Instr::EOL);
+        forth.add_instr(Instr::Lookup);
+        forth.add_instr(Instr::Bye);
 
         forth.input.push_str("my_func");
         forth.exec(immed).unwrap();
@@ -2084,36 +2084,36 @@ mod tests {
     fn can_define_word_from_input() {
         let mut forth = ToyForth::new();
 
-        let xt = forth.mark_cell();
+        let xt = forth.mark_code();
 
         /* f(x) = 2*x + 1 */
-        forth.push_cell(Instr::Push(Word::int(2)));
-        forth.push_cell(Instr::BinaryOp(BinOp::Star));
-        forth.push_cell(Instr::Push(Word::int(1)));
-        forth.push_cell(Instr::BinaryOp(BinOp::Plus));
-        forth.push_cell(Instr::Unnest);
+        forth.add_instr(Instr::Push(Word::int(2)));
+        forth.add_instr(Instr::BinaryOp(BinOp::Star));
+        forth.add_instr(Instr::Push(Word::int(1)));
+        forth.add_instr(Instr::BinaryOp(BinOp::Plus));
+        forth.add_instr(Instr::Unnest);
 
         forth.input.push_str("my_func");
 
         {
-            let immed = forth.mark_cell();
-            forth.push_cell(Instr::Push(Word::int(0)));
-            forth.push_cell(Instr::EOL);
-            forth.push_cell(Instr::DefStr);
-            forth.push_cell(Instr::Push(Word::from_xt(xt)));
-            forth.push_cell(Instr::DefWord);
-            forth.push_cell(Instr::Bye);
+            let immed = forth.mark_code();
+            forth.add_instr(Instr::Push(Word::int(0)));
+            forth.add_instr(Instr::EOL);
+            forth.add_instr(Instr::DefStr);
+            forth.add_instr(Instr::Push(Word::from_xt(xt)));
+            forth.add_instr(Instr::DefWord);
+            forth.add_instr(Instr::Bye);
 
             forth.exec(immed).unwrap();
         }
 
         {
-            let immed = forth.mark_cell();
+            let immed = forth.mark_code();
 
-            forth.push_cell(Instr::Push(Word::int(0)));
-            forth.push_cell(Instr::EOL);
-            forth.push_cell(Instr::Lookup);
-            forth.push_cell(Instr::Bye);
+            forth.add_instr(Instr::Push(Word::int(0)));
+            forth.add_instr(Instr::EOL);
+            forth.add_instr(Instr::Lookup);
+            forth.add_instr(Instr::Bye);
 
             forth.exec(immed).unwrap();
         }
