@@ -292,6 +292,7 @@ impl<'tf> Eq for ForthFunc<'tf> { }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum Primitive {
+    Empty,
     Bye,
     Push(Word),
     Drop,
@@ -332,12 +333,7 @@ enum BinOp {
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum Instr {
-    Empty,
     Prim(Primitive),
-    Special(),
-    Data(Word),
-    // Char{bytes:[u8;std::mem::size_of::<Word>()]},
-    Execute,
 }
 
 #[derive(Debug,Clone,Copy)]
@@ -883,7 +879,7 @@ impl<'tf> ToyForth<'tf> {
         }
 
         let xt = XT(ind as u32);
-        self.code.resize(ind + count, Instr::Empty);
+        self.code.resize(ind + count, Instr::Prim(Primitive::Empty));
 
         return (xt, &mut self.code[ind..]);
     }
@@ -1165,7 +1161,7 @@ impl<'tf> ToyForth<'tf> {
         let b = self.pop_int()?;
         let a = self.pop_int()?;
 
-        eprintln!("op = {:?}, a={}, b={}", op, a,b);
+        // eprintln!("op = {:?}, a={}, b={}", op, a,b);
         match op {
             BinOp::Plus  => { self.push(Word::int(a+b))?; },
             BinOp::Minus => { self.push(Word::int(a-b))?; },
@@ -1745,8 +1741,7 @@ impl<'tf> ToyForth<'tf> {
             let op = self.code[pc as usize];
             // eprintln!("pc = {}, code[pc] = {:?}", pc, op);
             match op {
-                // Instr::Empty | Instr::Special() | Instr::Char{..} | Instr::Data(_) => {
-                Instr::Empty | Instr::Special() | Instr::Data(_) => {
+                Instr::Prim(Primitive::Empty) => {
                     return Err(ForthError::InvalidCell(XT(pc)));
                 },
                 Instr::Prim(Primitive::Bye) => {
@@ -1835,11 +1830,6 @@ impl<'tf> ToyForth<'tf> {
                 Instr::Prim(Primitive::DoCol(new_pc)) => {
                     self.rstack.push(Word::xt(pc+1));
                     pc = new_pc.0;
-                },
-                Instr::Execute => {
-                    let xt = self.pop_xt()?;
-                    self.rstack.push(Word::xt(pc+1));
-                    pc = xt.0;
                 },
                 Instr::Prim(Primitive::Unnest) => {
                     let val = self.rstack.pop().ok_or(ForthError::ReturnStackUnderflow)?;
