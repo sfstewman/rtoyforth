@@ -578,7 +578,7 @@ impl<'tf> ToyForth<'tf> {
 
             if wh == 0 {                        // ( caddr u 0 -- caddr u )
                 self.dup()?;                    // ( caddr u -- caddr u u )
-                let len = self.pop_int()?;      // ( caddr u u -- caddr u )
+                let mut len = self.pop_int()?;      // ( caddr u u -- caddr u )
 
                 if len == 0 {
                     self.drop()?;               // ( caddr u -- caddr )
@@ -586,22 +586,52 @@ impl<'tf> ToyForth<'tf> {
                     break;
                 }
 
-                self.builtin_data_to_ret()?;    // ( caddr u -- caddr )         r: ( -- u )
-                self.push_int(0)?;              // ( caddr -- caddr 0 )         r: ( u -- u )
-                self.swap()?;                   // ( caddr 0 -- 0 caddr )       r: ( u -- u )
-                self.builtin_ret_to_data()?;    // ( 0 caddr -- 0 caddr u )     r: ( u -- )
+                self.builtin_data_to_ret()?;    // ( caddr u -- caddr )           r: ( -- u )
+                self.dup()?;                    // ( caddr -- caddr caddr )       r: ( u -- u )
+                self.builtin_char_at()?;        // ( caddr caddr -- caddr ch )    r: ( u -- u )
+                self.push_int('-' as i32)?;     // ( caddr ch -- caddr ch '-' )   r: ( u -- u )
+                self.binary_op(BinOp::Equal)?;      // ( caddr ch '-' -- caddr neg? ) r: ( u -- u )
+                self.swap()?;                   // ( caddr neg? -- neg? caddr )   r: ( u -- u )
+                self.over()?;                   // ( neg? caddr -- neg? caddr neg? ) r: ( u -- u )
 
-                self.builtin_to_number()?;      // ( 0 caddr u1 -- ud caddr u2 )
+                // self.print_stacks("-1-");
 
-                let consumed = self.pop_int()?; // ( ud caddr u2 -- ud caddr )
+                if self.pop_int()? != 0 {       // ( neg? caddr neg? -- neg? caddr ) r: ( u -- u )
+                    self.builtin_char_plus()?;  // ( neg? caddr -- neg? caddr2 )
+                    self.builtin_ret_to_data()?; // ( neg? caddr2 -- neg? caddr2 u ) r: ( u -- )
+                    let u = self.pop_int()?;    // ( neg? caddr2 u -- neg? caddr2 ) r: ( -- )
+                    self.push_int(u - 1)?;      // ( neg? caddr2 -- neg? caddr2 u2 ) r: ( -- )
+
+                    len -= 1;
+
+                    self.builtin_data_to_ret()?;    // ( neg? caddr2 u2 -- neg? caddr2 )  r: ( -- u2 )
+                    // self.print_stacks("-2-");
+                }
+
+                self.push_int(0)?;              // ( neg? caddr -- neg? caddr 0 ) r: ( u -- u )
+                self.swap()?;                   // ( neg? caddr 0 -- neg? 0 caddr ) r: ( u -- u )
+
+                self.builtin_ret_to_data()?;    // ( neg? 0 caddr -- neg? 0 caddr u ) r: ( u -- )
+
+                // self.print_stacks("-3-");
+                self.builtin_to_number()?;      // ( neg? 0 caddr u1 -- neg? ud caddr u2 )
+                // self.print_stacks("-4-");
+
+                let consumed = self.pop_int()?; // ( neg? ud caddr u2 -- neg? ud caddr )
 
                 if consumed < (len as i32) {
-                    let st = self.pop_str()?;   // ( ud caddr -- ud )
-                    self.drop()?;               // ( ud -- )
+                    let st = self.pop_str()?;   // ( neg? ud caddr -- neg? ud )
+                    self.drop()?;               // ( neg? ud -- neg? )
+                    self.drop()?;               // ( neg? -- )
                     return Err(ForthError::WordNotFound(st));
                 }
 
-                self.drop()?;                   // ( ud caddr -- ud )
+                self.drop()?;                   // ( neg? ud caddr -- neg? ud )
+
+                self.swap()?;                   // ( neg? ud -- ud neg? )
+                if self.pop_int()? != 0 {       // ( ud neg? -- ud )
+                    self.unary_op(UnaryOp::Negate)?;    // ( ud -- ud1 )
+                }
 
                 if is_compiling {
                     let num = self.pop_int()?;
@@ -2420,6 +2450,10 @@ mod tests {
         forth.interpret("1 2 +").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 3);
+
+        forth.interpret("-1 2 +").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 1);
     }
 
     #[test]
