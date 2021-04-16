@@ -428,6 +428,7 @@ enum ForthError {
     InvalidControlInstruction(XT),
     InvalidExecutionToken(Word),
     InvalidString(ST),
+    InvalidChar(i32),
     InvalidAddress(Addr),
     InvalidCountedString(ST),
     InvalidStringValue(u32),
@@ -524,6 +525,8 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func("!", ToyForth::builtin_var_set);
         tf.add_func("@", ToyForth::builtin_var_get);
+
+        tf.add_func("EMIT", ToyForth::builtin_emit);
 
         // define state variables
         let state_vars = vec![ "STATE", "/CDEF", "/CXT" ];
@@ -677,6 +680,19 @@ impl<'tf> ToyForth<'tf> {
         }
 
         return Ok(());
+    }
+
+    pub fn builtin_emit(&mut self) -> Result<(), ForthError> {
+        let ch = self.pop_int()?;
+        if ch < 0 || ch > 255 {
+            return Err(ForthError::InvalidChar(ch));
+        }
+
+        if let Some(w) = &mut self.out_stream {
+            let buf : [u8;1] = [ ch as u8 ];
+            w.write(&buf)?;
+        }
+        Ok(())
     }
 
     pub fn write_prompt(&mut self, prompt: &str) -> Result<(), ForthError> {
