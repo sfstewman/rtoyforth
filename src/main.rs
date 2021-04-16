@@ -555,7 +555,18 @@ impl<'tf> ToyForth<'tf> {
     pub fn print_stacks(&self, msg: &str) {
         eprintln!(">>> {}: ",msg);
         for (i,w) in self.dstack.iter().enumerate() {
-            eprintln!("[D {:3}] {:?}", i,w.kind());
+            let k = w.kind();
+            if let WordKind::Str(st) = k {
+                let s0 = self.maybe_string_at(st);
+                if let Ok(s) = s0 {
+                    eprintln!("[D {:3}] {:?} \"{}\"", i,w.kind(), s);
+                } else {
+                    let b = self.bytes_at(st);
+                    eprintln!("[D {:3}] {:?} {:?}", i,w.kind(), b);
+                }
+            } else {
+                eprintln!("[D {:3}] {:?}", i,w.kind());
+            }
         }
         for (i,w) in self.rstack.iter().enumerate() {
             eprintln!("[R {:3}] {:?}", i,w);
