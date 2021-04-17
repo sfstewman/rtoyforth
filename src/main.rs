@@ -560,9 +560,17 @@ impl<'tf> ToyForth<'tf> {
             Instr::Unnest,
         ]).unwrap();
 
-        tf.interpret(": 0< 0 < ;").unwrap();
-        tf.interpret(": 0> 0 > ;").unwrap();
-        tf.interpret(": ABS DUP 0< IF NEGATE THEN ;").unwrap();
+        tf.interpret("\
+: 0<  0 < ;
+: 0>  0 > ;
+: 0=  0 = ;
+: 0<> 0 <> ;
+: 1- 1 - ;
+: 1+ 1 + ;
+
+: ABS DUP 0< IF NEGATE THEN ;
+
+").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
