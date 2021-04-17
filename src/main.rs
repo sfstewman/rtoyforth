@@ -496,7 +496,6 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("/", Instr::BinaryOp(BinOp::Slash));
 
         tf.add_prim("NEGATE", Instr::UnaryOp(UnaryOp::Negate));
-
         tf.add_prim(">", Instr::BinaryOp(BinOp::Greater));
         tf.add_prim("<", Instr::BinaryOp(BinOp::Less));
         tf.add_prim("=", Instr::BinaryOp(BinOp::Equal));
@@ -560,6 +559,10 @@ impl<'tf> ToyForth<'tf> {
             Instr::Func(emit as u32),
             Instr::Unnest,
         ]).unwrap();
+
+        tf.interpret(": 0< 0 < ;").unwrap();
+        tf.interpret(": 0> 0 > ;").unwrap();
+        tf.interpret(": ABS DUP 0< IF NEGATE THEN ;").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
