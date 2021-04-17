@@ -302,6 +302,10 @@ enum Instr {
     UnaryOp(UnaryOp),
     Branch(i32),
     BranchOnZero(i32),  // branches if stack top is 0
+    ControlIndexPush(u8),
+    ControlIndexPop(u8),
+    ControlIteration,
+    ControlIndexPeek(u32),
     EOL,
     Lookup,
     DefStr,
@@ -330,6 +334,17 @@ enum BinOp {
     NotEqual,
 }
 
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+enum ControlEntry {
+    /*
+    IfAddr(XT),
+    ElseAddr(XT),
+    LoopAddr(XT),
+    */
+    Addr(XT),
+    Index(i32),
+}
+
 #[derive(Debug,Clone,Copy)]
 struct DictEntry {
     st: ST,
@@ -353,7 +368,7 @@ impl DictEntry {
 struct ToyForth<'tf> {
     dstack: Vec<Word>,
     rstack: Vec<Word>,
-    cstack: Vec<XT>,
+    cstack: Vec<ControlEntry>,
     ufuncs: Vec<ForthFunc<'tf>>,
 
     dict: Vec<DictEntry>,
@@ -425,6 +440,8 @@ enum ForthError {
     WordNotFound(ST),
 
     InvalidCell(XT),
+    InvalidControlEntry(ControlEntry),
+    InvalidIndex(Word),
     InvalidControlInstruction(XT),
     InvalidExecutionToken(Word),
     InvalidString(ST),
@@ -510,6 +527,10 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("ELSE", ToyForth::builtin_else);
         tf.add_immed("THEN", ToyForth::builtin_then);
 
+        tf.add_immed("DO", ToyForth::builtin_do);
+        tf.add_immed("LOOP", ToyForth::builtin_loop);
+        tf.add_immed("I", ToyForth::builtin_loop_ind0);
+
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
         tf.add_func("FIND", ToyForth::builtin_find);
@@ -543,6 +564,41 @@ impl<'tf> ToyForth<'tf> {
         return tf;
     }
 
+    fn cpush_addr(&mut self, xt: XT) {
+        self.cstack.push(ControlEntry::Addr(xt));
+    }
+
+    fn cpush_index(&mut self, idx: i32) {
+        self.cstack.push(ControlEntry::Index(idx));
+    }
+
+    fn cpop_addr(&mut self) -> Result<XT,ForthError> {
+        let ctl = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
+        if let ControlEntry::Addr(xt) = ctl {
+            Ok(xt)
+        } else {
+            Err(ForthError::InvalidControlEntry(ctl))
+        }
+    }
+
+    fn cpop_index(&mut self) -> Result<i32,ForthError> {
+        let ctl = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
+        if let ControlEntry::Index(idx) = ctl {
+            Ok(idx)
+        } else {
+            Err(ForthError::InvalidControlEntry(ctl))
+        }
+    }
+
+    fn cpeek_index(&mut self) -> Result<i32,ForthError> {
+        let ctl = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
+        if let ControlEntry::Index(idx) = ctl {
+            Ok(idx)
+        } else {
+            Err(ForthError::InvalidControlEntry(ctl))
+        }
+    }
+
     pub fn print_stacks(&self, msg: &str) {
         eprintln!(">>> {}: ",msg);
         for (i,w) in self.dstack.iter().enumerate() {
@@ -562,6 +618,9 @@ impl<'tf> ToyForth<'tf> {
         for (i,w) in self.rstack.iter().enumerate() {
             eprintln!("[R {:3}] {:?}", i,w);
         }
+        for (i,itm) in self.cstack.iter().enumerate() {
+            eprintln!("[C {:3}] {:?}", i, itm);
+        }
         eprintln!("done\n");
     }
 
@@ -574,6 +633,14 @@ impl<'tf> ToyForth<'tf> {
 
     pub fn compiling(&self) -> bool {
         return self.vars[0].to_int().unwrap_or(0) != 0;
+    }
+
+    pub fn check_compiling(&self) -> Result<(), ForthError> {
+        if self.compiling() {
+            Ok(())
+        } else {
+            Err(ForthError::InvalidCompilerWord)
+        }
     }
 
     pub fn builtin_interpret(&mut self) -> Result<(), ForthError> {
@@ -1522,24 +1589,20 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_if(&mut self) -> Result<(), ForthError> {
-        if !self.compiling() {
-            return Err(ForthError::InvalidCompilerWord);
-        }
+        self.check_compiling()?;
 
         // add branch, fixup cstack reference later
         let xt = self.add_instr(Instr::BranchOnZero(0));
-        self.cstack.push(xt);
+        self.cpush_addr(xt);
 
         Ok(())
     }
 
     fn builtin_then(&mut self) -> Result<(), ForthError> {
-        if !self.compiling() {
-            return Err(ForthError::InvalidCompilerWord);
-        }
+        self.check_compiling()?;
 
         let xt = self.mark_code();
-        let if_else_xt = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
+        let if_else_xt = self.cpop_addr()?;
 
         // XXX: check for overflow
         let delta : i32 = ((xt.0 as i64) - (if_else_xt.0 as i64)) as i32;
@@ -1560,15 +1623,13 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_else(&mut self) -> Result<(), ForthError> {
-        if !self.compiling() {
-            return Err(ForthError::InvalidCompilerWord);
-        }
+        self.check_compiling()?;
 
-        let if_xt = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
+        let if_xt = self.cpop_addr()?;
         let else_xt = self.add_instr(Instr::Branch(0));
 
         let xt = self.mark_code();
-        self.cstack.push(else_xt);
+        self.cpush_addr(else_xt);
 
         let delta : i32 = ((xt.0 as i64) - (if_xt.0 as i64)) as i32;
         match self.code[if_xt.0 as usize] {
@@ -1579,6 +1640,46 @@ impl<'tf> ToyForth<'tf> {
                 return Err(ForthError::InvalidControlInstruction(if_xt));
             }
         }
+
+        Ok(())
+    }
+
+    fn builtin_do(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        // loop header
+        self.add_code(&[
+            Instr::ControlIndexPush(2),
+        ]);
+
+        let xt = self.mark_code();
+        self.cpush_addr(xt);
+        Ok(())
+    }
+
+    fn builtin_loop(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let do_xt = self.cpop_addr()?;
+
+        // ControlIteration: ( -- 0 | 1 ) (C: n1 n2 -- n1 n3 | )
+        // if n2<n1, pushes n1 and n3=n2-1 onto the control stack, pushes 0 onto the data stack
+        // if n2>=1, pops n1,n2 from the control stack, pushes 1 onto the data stack
+        self.add_instr(Instr::ControlIteration);
+
+        // branch back to DO (after loop header)
+        let xt = self.mark_code();
+        let delta : i32 = ((do_xt.0 as i64) - (xt.0 as i64)) as i32;
+        self.add_instr(Instr::BranchOnZero(delta));
+
+        Ok(())
+    }
+
+    fn builtin_loop_ind0(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        // TODO: check that we're in a loop
+        self.add_instr(Instr::ControlIndexPeek(0));
 
         Ok(())
     }
@@ -1794,6 +1895,87 @@ impl<'tf> ToyForth<'tf> {
                     } else {
                         pc += 1;
                     }
+                },
+                Instr::ControlIndexPush(count) => {
+                    if count > 0 {
+                        let dlen = self.dstack.len();
+                        if dlen < count as usize {
+                            return Err(ForthError::StackUnderflow);
+                        }
+
+                        let i0 = dlen-(count as usize);
+                        for itm in self.dstack.drain(i0..) {
+                            if let WordKind::Int(index) = itm.kind() {
+                                self.cstack.push(ControlEntry::Index(index));
+                            } else {
+                                return Err(ForthError::InvalidIndex(itm));
+                            }
+                        }
+                    }
+
+                    pc += 1;
+                },
+                Instr::ControlIndexPop(count) => {
+                    if count > 0 {
+                        let clen = self.cstack.len();
+                        if clen < count as usize {
+                            return Err(ForthError::ControlStackUnderflow);
+                        }
+
+                        let i0 = clen-(count as usize);
+                        for itm in self.cstack.drain(i0..) {
+                            if let ControlEntry::Index(index) = itm {
+                                self.dstack.push(Word::int(index));
+                            } else {
+                                return Err(ForthError::InvalidControlEntry(itm));
+                            }
+                        }
+                    }
+
+                    pc += 1;
+                },
+                Instr::ControlIndexPeek(ind) => {
+                    let clen = self.cstack.len();
+                    if clen <= ind as usize {
+                        return Err(ForthError::ControlStackUnderflow);
+                    }
+
+                    let entry = self.cstack[(clen-1-(ind as usize))];
+                    if let ControlEntry::Index(index) = entry {
+                        self.push_int(index)?;
+                    } else {
+                        return Err(ForthError::InvalidControlEntry(entry));
+                    }
+
+                    pc += 1;
+                },
+                Instr::ControlIteration => {
+                    let clen = self.cstack.len();
+                    if clen < 2 {
+                        return Err(ForthError::ControlStackUnderflow);
+                    }
+
+                    let top = if let ControlEntry::Index(idx) = self.cstack[clen-2] {
+                        idx
+                    } else {
+                        return Err(ForthError::InvalidControlEntry(self.cstack[clen-2]));
+                    };
+
+                    let ind = if let ControlEntry::Index(idx) = self.cstack[clen-1] {
+                        idx
+                    } else {
+                        return Err(ForthError::InvalidControlEntry(self.cstack[clen-1]));
+                    };
+
+                    if ind < top {
+                        self.cstack[clen-1] = ControlEntry::Index(ind+1);
+                        self.push_int(0)?;
+                    } else {
+                        self.cstack.truncate(clen-2);
+                        self.push_int(1)?;
+                    }
+
+                    pc += 1;
                 },
                 Instr::UnaryOp(op) => {
                     self.unary_op(op)?;
@@ -2643,6 +2825,29 @@ mod tests {
 
         forth.interpret("1 foo").unwrap();
         assert_eq!(forth.pop_int().unwrap(), 456);
+    }
+
+    #[test]
+    fn single_loop() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret(": foo 3 1 do dup . 5 + loop ;").unwrap();
+
+        let foo_xt = forth.lookup_word("foo").unwrap();
+        for (i,instr) in forth.code[foo_xt.0 as usize..].iter().enumerate() {
+            eprintln!("[{:3}] {:?}", i, instr);
+            if let Instr::Unnest = *instr {
+                break
+            }
+        }
+
+        forth.interpret("10 foo").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 25);
+
+        forth.interpret("1 foo").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 16);
     }
 }
 
