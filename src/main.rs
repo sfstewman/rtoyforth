@@ -1533,9 +1533,9 @@ impl<'tf> ToyForth<'tf> {
             let mut wr = out.borrow_mut();
 
             if let WordKind::Int(n) = w.kind() {
-                write!(wr, "{}", n)?;
+                write!(wr, "{} ", n)?;
             } else {
-                write!(wr, "{}", w)?;
+                write!(wr, "{} ", w)?;
             }
             wr.flush()?;
         }
@@ -2943,19 +2943,20 @@ mod tests {
 
         assert_eq!(forth.stack_depth(), 0);
 
-        if let Ok(s) = std::str::from_utf8(&outv.borrow()) {
-            eprintln!("output is\n{}", s);
-            assert_eq!(s, "I 1  J 1
-I 1  J 2
-I 1  J 3
-I 2  J 1
-I 2  J 2
-I 2  J 3
-I 3  J 1
-I 3  J 2
-I 3  J 3
+        let outb = &outv.borrow();
+        let s = std::str::from_utf8(outb).unwrap();
+        eprintln!("output is\n{}", s);
+        assert_eq!(s, "\
+I 1   J 1 
+I 1   J 2 
+I 1   J 3 
+I 2   J 1 
+I 2   J 2 
+I 2   J 3 
+I 3   J 1 
+I 3   J 2 
+I 3   J 3 
 ");
-        };
     }
 
     #[test]
