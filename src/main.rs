@@ -598,6 +598,22 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    pub fn print_code(&self, xt: XT) {
+        for (i,instr) in self.code[xt.0 as usize..].iter().enumerate() {
+            eprintln!("[{:3}] {:?}", i, instr);
+            if let Instr::Unnest = *instr {
+                break
+            }
+        }
+    }
+
+    pub fn print_word_code(&self, word: &str) {
+        let xt = self.lookup_word(word).unwrap();
+        eprintln!("word: {}\ncode:", word);
+        self.print_code(xt);
+        eprintln!(".\n");
+    }
+
     pub fn print_stacks(&self, msg: &str) {
         eprintln!(">>> {}: ",msg);
         for (i,w) in self.dstack.iter().enumerate() {
@@ -2871,14 +2887,7 @@ mod tests {
         let mut forth = ToyForth::new();
 
         forth.interpret(": foo dup 5 > if . 123 else . 456 then ;").unwrap();
-
-        let foo_xt = forth.lookup_word("foo").unwrap();
-        for (i,instr) in forth.code[foo_xt.0 as usize..].iter().enumerate() {
-            eprintln!("[{:3}] {:?}", i, instr);
-            if let Instr::Unnest = *instr {
-                break
-            }
-        }
+        forth.print_word_code("foo");
 
         forth.interpret("7 foo").unwrap();
         assert_eq!(forth.pop_int().unwrap(), 123);
