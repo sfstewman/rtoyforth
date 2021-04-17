@@ -530,6 +530,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("DO", ToyForth::builtin_do);
         tf.add_immed("LOOP", ToyForth::builtin_loop);
         tf.add_immed("I", ToyForth::builtin_loop_ind0);
+        tf.add_immed("J", ToyForth::builtin_loop_ind1);
 
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
@@ -1709,6 +1710,40 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn builtin_loop_ind1(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        // TODO: check that we're in a loop
+        self.add_instr(Instr::ControlIndexPeek(2));
+
+        Ok(())
+    }
+
+    // [CHAR]
+    fn builtin_brak_char(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), ' ' as u8);
+
+        let off = self.input_off+w0;
+        let end = self.input_off+w1;
+
+        // TODO: replace with u32::MAX when supported
+        if end > 0xffff_ffff {
+            return Err(ForthError::StringTooLong);
+        }
+
+        self.input_off = end;
+
+        if off >= end {
+            return Err(ForthError::InvalidEmptyString);
+        }
+
+        let w = Word::int(self.input.as_bytes()[off] as i32);
+        self.add_instr(Instr::Push(w));
+        Ok(())
+    }
+
     fn builtin_char(&mut self) -> Result<(), ForthError> {
         let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), ' ' as u8);
 
@@ -2873,6 +2908,66 @@ mod tests {
         forth.interpret("1 foo").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 16);
+    }
+
+    #[test]
+    fn double_loop() {
+        let mut forth = ToyForth::new();
+        let outv = Rc::new(RefCell::new(Vec::<u8>::new()));
+
+        forth.capture_interpret(
+            ": foo \
+    3 1 do \
+        3 1 do \
+            [CHAR] I EMIT \
+            BL EMIT \
+            J . \
+            BL EMIT \
+            BL EMIT \
+            [CHAR] J EMIT \
+            BL EMIT \
+            I . \
+            CR \
+        LOOP \
+    LOOP \
+    ; \
+    foo",
+            outv.clone()
+        ).unwrap();
+
+        assert_eq!(forth.stack_depth(), 0);
+
+        if let Ok(s) = std::str::from_utf8(&outv.borrow()) {
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, "I 1  J 1
+I 1  J 2
+I 1  J 3
+I 2  J 1
+I 2  J 2
+I 2  J 3
+I 3  J 1
+I 3  J 2
+I 3  J 3
+");
+        };
+    }
+
+    #[test]
+    fn bracket_char() {
+        let mut forth = ToyForth::new();
+        let outv = Rc::new(RefCell::new(Vec::<u8>::new()));
+
+        forth.capture_interpret(
+            ": XX [CHAR] X EMIT CR ; XX",
+            outv.clone()
+        ).unwrap();
+
+        assert_eq!(forth.stack_depth(), 0);
+
+        if let Ok(s) = std::str::from_utf8(&outv.borrow()) {
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, "X\n");
+        };
     }
 }
 
