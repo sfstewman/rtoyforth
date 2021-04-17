@@ -1513,17 +1513,28 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
-    fn scan_delim(bytes: &[u8], delim: u8, expect: bool) -> usize {
-        bytes.iter().enumerate().find(
-            |(_loc,ch)| (**ch == delim) == expect
-        ).map_or(bytes.len(), |(loc,_)| loc as usize)
-    }
+    fn scan_word(bytes: &[u8], delim: u8) -> (usize, usize, usize) {
+        let n = bytes.len();
 
-    fn scan_word(bytes: &[u8], delim: u8) -> (usize,usize) {
-        let i0 = ToyForth::scan_delim(bytes, delim, false);
-        let i1 = ToyForth::scan_delim(&bytes[i0..], delim, true);
+        // skip any leading delimiters
+        let mut w0 = 0;
+        while w0 < n && bytes[w0] == delim {
+            w0 += 1;
+        }
 
-        return (i0,i0+i1);
+        // search for next delimiter
+        let mut w1 = w0;
+        while w1 < n && bytes[w1] != delim {
+            w1 += 1;
+        }
+
+        // skip any trailing delimiters
+        let mut w2 = w1;
+        while w2 < n && bytes[w2] == delim {
+            w2 += 1;
+        }
+
+        (w0,w1,w2)
     }
 
     fn builtin_dot(&mut self) -> Result<(), ForthError> {
@@ -1736,42 +1747,39 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_brak_char(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
-        let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), ' ' as u8);
+        let off0 = self.input_off;
+        let bytes = self.input.as_bytes();
 
-        let off = self.input_off+w0;
-        let end = self.input_off+w1;
+        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], ' ' as u8);
 
-        // TODO: replace with u32::MAX when supported
-        if end > 0xffff_ffff {
-            return Err(ForthError::StringTooLong);
-        }
+        let word_off = off0 + w0;
+        let word_end = off0 + w1;
+        self.input_off = off0 + w2;
 
-        self.input_off = end;
-
-        if off >= end {
+        if word_off >= word_end {
             return Err(ForthError::InvalidEmptyString);
         }
 
-        let w = Word::int(self.input.as_bytes()[off] as i32);
+        let w = Word::int(self.input.as_bytes()[word_off] as i32);
         self.add_instr(Instr::Push(w));
         Ok(())
     }
 
     fn builtin_char(&mut self) -> Result<(), ForthError> {
-        let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), ' ' as u8);
+        let off0 = self.input_off;
+        let bytes = self.input.as_bytes();
+
+        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], ' ' as u8);
+
+        let word_off = off0 + w0;
+        let word_end = off0 + w1;
+        self.input_off = off0 + w2;
 
         let off = self.input_off+w0;
         let end = self.input_off+w1;
 
-        // TODO: replace with u32::MAX when supported
-        if end > 0xffff_ffff {
-            return Err(ForthError::StringTooLong);
-        }
-
-        self.input_off = end;
-
-        if end > off {
-            self.push_int(self.input.as_bytes()[off] as i32)?;
+        if word_off < word_end {
+            self.push_int(self.input.as_bytes()[word_off] as i32)?;
             Ok(())
         } else {
             Err(ForthError::InvalidEmptyString)
@@ -1794,19 +1802,21 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_word(&mut self) -> Result<(), ForthError> {
         let delim = self.pop_delim()?;
 
-        let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), delim);
+        let off0 = self.input_off;
+        let bytes = self.input.as_bytes();
+        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], delim);
 
-        let word_off = self.input_off+w0;
-        let word_end = self.input_off+w1;
+        let word_off = off0 + w0;
+        let word_end = off0 + w1;
+        self.input_off = off0 + w2;
+
+        let wstr : &mut [u8] = &mut self.word[..];
 
         let len = word_end - word_off;
-        if len >= 255 {
+        if len+1 >= wstr.len() {
             return Err(ForthError::StringTooLong);
         }
 
-        self.input_off = word_end;
-
-        let wstr : &mut [u8] = &mut self.word[..];
         wstr[0] = len as u8;
         wstr[1..(len+1)].copy_from_slice(&self.input.as_bytes()[word_off..word_end]);
 
@@ -1818,12 +1828,13 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_parse(&mut self) -> Result<(), ForthError> {
         let delim = self.pop_delim()?;
 
-        let (w0,w1) = ToyForth::scan_word(&self.input[self.input_off..].as_bytes(), delim);
+        let off0 = self.input_off;
+        let bytes = self.input.as_bytes();
+        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], delim);
 
-        let word_off = self.input_off+w0;
-        let word_end = self.input_off+w1;
-
-        self.input_off = word_end;
+        let word_off = off0 + w0;
+        let word_end = off0 + w1;
+        self.input_off = off0 + w2;
 
         let len = word_end - word_off;
         let off = word_off;
@@ -2396,25 +2407,25 @@ mod tests {
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 3);
+        assert_eq!(forth.input_off, 5);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "x");
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,2)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 9);
+        assert_eq!(forth.input_off, 10);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "test");
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,5)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 13);
+        assert_eq!(forth.input_off, 14);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "foo");
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,4)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 17);
+        assert_eq!(forth.input_off, 20);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "bar");
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,4)));
 
@@ -2444,7 +2455,7 @@ mod tests {
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
-        assert_eq!(forth.input_off, 7);
+        assert_eq!(forth.input_off, 9);
         assert_eq!(forth.bytes_at(forth.peek_str().unwrap()), &vec![5 as u8, 'x' as u8, 't' as u8, 'e' as u8, 's' as u8, 't' as u8]);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "xtest");
 
@@ -2468,25 +2479,25 @@ mod tests {
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
-        assert_eq!(forth.input_off, 3);
+        assert_eq!(forth.input_off, 5);
         assert_eq!(forth.pop_int().unwrap(), 1);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(2,1)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
-        assert_eq!(forth.input_off, 9);
+        assert_eq!(forth.input_off, 10);
         assert_eq!(forth.pop_int().unwrap(), 4);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(5,4)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
-        assert_eq!(forth.input_off, 13);
+        assert_eq!(forth.input_off, 14);
         assert_eq!(forth.pop_int().unwrap(), 3);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(10,3)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
-        assert_eq!(forth.input_off, 17);
+        assert_eq!(forth.input_off, 20);
         assert_eq!(forth.pop_int().unwrap(), 3);
         assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(14,3)));
 
@@ -2511,19 +2522,19 @@ mod tests {
         forth.set_input("  x  test foo bar   ");
 
         forth.builtin_char().unwrap();
-        assert_eq!(forth.input_off, 3);
+        assert_eq!(forth.input_off, 5);
         assert_eq!(forth.pop_int().unwrap(), 'x' as i32);
 
         forth.builtin_char().unwrap();
-        assert_eq!(forth.input_off, 9);
+        assert_eq!(forth.input_off, 10);
         assert_eq!(forth.pop_int().unwrap(), 't' as i32);
 
         forth.builtin_char().unwrap();
-        assert_eq!(forth.input_off, 13);
+        assert_eq!(forth.input_off, 14);
         assert_eq!(forth.pop_int().unwrap(), 'f' as i32);
 
         forth.builtin_char().unwrap();
-        assert_eq!(forth.input_off, 17);
+        assert_eq!(forth.input_off, 20);
         assert_eq!(forth.pop_int().unwrap(), 'b' as i32);
 
         // out of words, make sure this is an error!
