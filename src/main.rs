@@ -1511,9 +1511,14 @@ impl<'tf> ToyForth<'tf> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
         if let Some(out) = &mut self.out_stream {
-            use std::io::Write;
-            write!(out, "{}\n", w)?;
-            out.flush()?;
+            let mut wr = out.borrow_mut();
+
+            if let WordKind::Int(n) = w.kind() {
+                write!(wr, "{}", n)?;
+            } else {
+                write!(wr, "{}", w)?;
+            }
+            wr.flush()?;
         }
 
         Ok(())
