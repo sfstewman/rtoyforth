@@ -1610,14 +1610,9 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::InvalidInterpreterWord);
         }
 
-        eprintln!("SEMI: COMPILING");
-
         self.add_instr(Instr::Unnest);
         let st = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?.to_str().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
         let xt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?.to_xt().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
-
-        eprintln!("SEMI: st = {:?} \"{}\", xt = {:?}",
-              st, self.string_at(st), xt);
 
         self.dict.push(DictEntry{
             st: st,
