@@ -543,6 +543,10 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("!", ToyForth::builtin_var_set);
         tf.add_func("@", ToyForth::builtin_var_get);
 
+        tf.add_func("TYPE", ToyForth::builtin_type);
+        tf.add_immed("S\"", ToyForth::builtin_s_quote);
+        tf.add_immed(".\"", ToyForth::builtin_dot_quote);
+
         // define state variables
         let state_vars = vec![ "STATE", "/CDEF", "/CXT" ];
         for v in &state_vars {
@@ -1853,6 +1857,71 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn add_string_to_quote(&mut self) -> Result<(ST,usize),ForthError> {
+        let off0 = self.input_off;
+        let bytes = self.input.as_bytes();
+
+        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], '"' as u8);
+
+        let word_off = off0 + w0;
+        let word_end = off0 + w1;
+        self.input_off = off0 + w2;
+
+        let len = word_end - word_off;
+        if len > 255 {
+            return Err(ForthError::StringTooLong);
+        }
+
+        let st = if word_off < word_end {
+            // allocate string
+            let off = self.strings.len();
+
+            self.strings.extend_from_slice(&bytes[word_off..word_end]);
+            self.strings.push(0);
+            ST::allocated_space(off as u32,len as u8)
+        } else {
+            // empty string
+            ST::allocated_space(0,0)
+        };
+
+        Ok((st,len))
+    }
+
+    pub fn builtin_s_quote(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        let (st,len) = self.add_string_to_quote()?;
+
+        self.add_instr(Instr::Push(st.to_word()));
+        self.add_instr(Instr::Push(Word::int(len as i32)));
+        Ok(())
+    }
+
+    pub fn builtin_type(&mut self) -> Result<(),ForthError> {
+        let len = self.pop_int()?;
+        let st = self.pop_str()?;
+
+        let s = self.maybe_string_at(st)?;
+
+        if let Some(out) = &self.out_stream {
+            let mut w = out.borrow_mut();
+            w.write(s.as_bytes())?;
+        }
+
+        Ok(())
+    }
+
+    pub fn builtin_dot_quote(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        // something that bypasses the dictionary and uses a Func instr directly?
+        let type_xt = self.lookup_word("TYPE")?;
+
+        self.builtin_s_quote()?;
+        self.add_instr(Instr::DoCol(type_xt));
+        Ok(())
+    }
+
     // nb: pop is only called from rust, so it's not a forth primitive
     pub fn pop(&mut self) -> Option<Word> {
         self.dstack.pop()
@@ -2986,6 +3055,39 @@ I 3   J 3
             eprintln!("output is\n{}", s);
             assert_eq!(s, "X\n");
         };
+    }
+
+    #[test]
+    fn s_quote_strings() {
+        let mut forth = ToyForth::new();
+
+        {
+            forth.interpret(": test S\" foo bar \" ; test").unwrap();
+            forth.print_word_code("test");
+            assert_eq!(forth.stack_depth(), 2);
+
+            let count = forth.pop_int().unwrap();
+            let st = forth.pop_str().unwrap();
+            assert_eq!(count, 8);
+            assert_eq!(forth.string_at(st), "foo bar ");
+        }
+    }
+
+    #[test]
+    fn dot_quote_strings() {
+        let mut forth = ToyForth::new();
+        let outv = Rc::new(RefCell::new(Vec::<u8>::new()));
+
+        {
+            forth.capture_interpret(": test .\" foo bar \" ; test", outv.clone()).unwrap();
+            forth.print_word_code("test");
+            assert_eq!(forth.stack_depth(), 0);
+
+            let outb = &outv.borrow();
+            let s = std::str::from_utf8(outb).unwrap();
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, "foo bar ");
+        }
     }
 }
 
