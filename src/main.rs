@@ -660,8 +660,12 @@ impl<'tf> ToyForth<'tf> {
     pub fn interpret(&mut self, s: &str) -> Result<(), ForthError> {
         // initial interpret is dumb...
 
-        self.set_input(s);
-        self.builtin_interpret()
+        for l in s.lines() {
+            self.set_input(l);
+            self.builtin_interpret()?;
+        }
+
+        Ok(())
     }
 
     pub fn compiling(&self) -> bool {
