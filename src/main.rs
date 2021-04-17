@@ -506,11 +506,6 @@ impl<'tf> ToyForth<'tf> {
 
         // words that may be replaced with Forth definitions at some point
         tf.add_prim("BL", Instr::Push(Word::int(' ' as i32)));
-        tf.add_word("CR", &[
-            Instr::Push(Word::int('\n' as i32)),
-            Instr::Func(emit as u32),
-            Instr::Unnest,
-        ]);
         tf.add_func("CHAR", ToyForth::builtin_char);
         tf.add_func("WORD", ToyForth::builtin_word);
         tf.add_func("C@", ToyForth::builtin_char_at);
@@ -554,6 +549,13 @@ impl<'tf> ToyForth<'tf> {
             let addr = tf.new_var(Word(0)).unwrap();
             tf.add_prim(v, Instr::Push(addr.to_word()));
         }
+
+        // define standard words that are not primitives
+        tf.add_word("CR", &[
+            Instr::Push(Word::int('\n' as i32)),
+            Instr::Func(emit as u32),
+            Instr::Unnest,
+        ]).unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
