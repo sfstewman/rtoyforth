@@ -386,28 +386,6 @@ struct ToyForth<'tf> {
     out_stream: Option<&'tf mut dyn std::io::Write>,
 }
 
-#[derive(Debug,PartialEq)]
-enum LexErrorType {
-    UnterminatedString,
-    InvalidNumber,
-    InvalidEscape,
-    InvalidIdent,
-    // InvalidChar,
-}
-
-#[derive(Debug, PartialEq)]
-struct LexError {
-    error: LexErrorType,
-    ind0: usize,
-    ind1: usize,
-}
-
-#[derive(Debug, PartialEq)]
-struct LexError1<'a> {
-    error: LexErrorType,
-    source: &'a str,
-}
-
 #[derive(Debug)]
 enum ForthError {
     StackUnderflow,
