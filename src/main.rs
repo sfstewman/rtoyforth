@@ -1,3 +1,6 @@
+use std::rc::Rc;
+use std::cell::RefCell;
+
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 struct Word(u32);
 
@@ -382,8 +385,9 @@ struct ToyForth<'tf> {
     input: String,
     input_off: usize,
 
-    in_stream: Option<&'tf mut dyn std::io::BufRead>,
-    out_stream: Option<&'tf mut dyn std::io::Write>,
+    // in_stream: Option<Rc<RefCell<(dyn std::io::BufRead)>>>,
+    in_stream: Option<Rc<RefCell<(dyn LineReader)>>>,
+    out_stream: Option<Rc<RefCell<(dyn std::io::Write)>>>,
 }
 
 #[derive(Debug)]
@@ -439,6 +443,16 @@ impl std::convert::From<std::io::Error> for ForthError {
     }
 }
 
+pub trait LineReader {
+    fn read_line(&self, buf: &mut String) -> std::io::Result<usize>;
+}
+
+impl LineReader for std::io::Stdin {
+    fn read_line(&self, buf: &mut String) -> std::io::Result<usize> {
+        std::io::Stdin::read_line(self,buf)
+    }
+}
+
 impl<'tf> ToyForth<'tf> {
     const ADDR_STATE:      Addr = Addr(0);
     const ADDR_SLASH_CDEF: Addr = Addr(1);
@@ -488,9 +502,15 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("=", Instr::BinaryOp(BinOp::Equal));
         tf.add_prim("<>", Instr::BinaryOp(BinOp::NotEqual));
 
+        let (emit,_) = tf.add_func("EMIT", ToyForth::builtin_emit);
+
         // words that may be replaced with Forth definitions at some point
         tf.add_prim("BL", Instr::Push(Word::int(' ' as i32)));
-        tf.add_prim("CR", Instr::Push(Word::int('\n' as i32)));
+        tf.add_word("CR", &[
+            Instr::Push(Word::int('\n' as i32)),
+            Instr::Func(emit as u32),
+            Instr::Unnest,
+        ]);
         tf.add_func("CHAR", ToyForth::builtin_char);
         tf.add_func("WORD", ToyForth::builtin_word);
         tf.add_func("C@", ToyForth::builtin_char_at);
@@ -500,6 +520,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func(".", ToyForth::builtin_dot);
         tf.add_func(":", ToyForth::builtin_colon);
         tf.add_immed(";", ToyForth::builtin_semi);
+
+        tf.add_immed("[CHAR]", ToyForth::builtin_brak_char);
 
         tf.add_immed("IF", ToyForth::builtin_if);
         tf.add_immed("ELSE", ToyForth::builtin_else);
@@ -524,8 +546,6 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func("!", ToyForth::builtin_var_set);
         tf.add_func("@", ToyForth::builtin_var_get);
-
-        tf.add_func("EMIT", ToyForth::builtin_emit);
 
         // define state variables
         let state_vars = vec![ "STATE", "/CDEF", "/CXT" ];
@@ -600,6 +620,15 @@ impl<'tf> ToyForth<'tf> {
             eprintln!("[C {:3}] {:?}", i, itm);
         }
         eprintln!("done\n");
+    }
+
+    pub fn capture_interpret(&mut self, s: &str, w: Rc<RefCell<dyn std::io::Write>>) -> Result<(),ForthError> {
+        // w: &'tf mut dyn std::io::Write) 
+        let old_out = std::mem::replace(&mut self.out_stream, Some(w));
+        let ret = self.interpret(s);
+        self.out_stream = old_out;
+
+        return ret;
     }
 
     pub fn interpret(&mut self, s: &str) -> Result<(), ForthError> {
@@ -721,10 +750,19 @@ impl<'tf> ToyForth<'tf> {
         self.input.clear();
 
         if let Some(inp) = &mut self.in_stream {
-            return ToyForth::refill(inp, &mut self.input);
+            let mut r = inp.borrow_mut();
+            let s = &mut self.input;
+            r.read_line(s)?;
+            if let Some(ch) = s.pop() {
+                if ch != '\n' {
+                    s.push(ch);
+                }
+            }
+
         }
 
-        return Ok(());
+        // return ToyForth::refill(rdr.deref_mut(), &mut self.input);
+        Ok(())
     }
 
     pub fn builtin_emit(&mut self) -> Result<(), ForthError> {
@@ -733,15 +771,18 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::InvalidChar(ch));
         }
 
-        if let Some(w) = &mut self.out_stream {
-            let buf : [u8;1] = [ ch as u8 ];
-            w.write(&buf)?;
+        if let Some(out) = &mut self.out_stream {
+            let mut w = out.borrow_mut();
+            // let buf : [u8;1] = [ ch as u8 ];
+            // w.write(&buf)?;
+            w.write(&[ ch as u8 ]);
         }
         Ok(())
     }
 
     pub fn write_prompt(&mut self, prompt: &str) -> Result<(), ForthError> {
-        if let Some(w) = &mut self.out_stream {
+        if let Some(out) = &mut self.out_stream {
+            let mut w = out.borrow_mut();
             write!(w, "{}\n", prompt)?;
             w.flush()?;
         }
@@ -755,15 +796,16 @@ impl<'tf> ToyForth<'tf> {
         let stdin = std::io::stdin();
         let stdout = std::io::stdout();
 
-        let mut in_handle = stdin.lock();
-        let mut out_handle = stdout.lock();
-
         let mut forth = ToyForth::new();
 
-        forth.repl(prompt, &mut in_handle, &mut out_handle)
+        // forth.repl(prompt, &mut in_handle, &mut out_handle)
+        let r = Rc::new(RefCell::new(stdin));
+        let w = Rc::new(RefCell::new(stdout));
+        forth.repl(prompt, r, w)
     }
 
-    pub fn repl(&mut self, prompt: &str, r: &'tf mut dyn std::io::BufRead, w: &'tf mut dyn std::io::Write) -> Result<(),ForthError> {
+    // pub fn repl(&mut self, prompt: &str, r: &'tf mut dyn std::io::BufRead, w: &'tf mut dyn std::io::Write) -> Result<(),ForthError> {
+    pub fn repl(&mut self, prompt: &str, r: Rc<RefCell<(dyn LineReader + 'static)>>, w: Rc<RefCell<(dyn std::io::Write + 'static)>>) -> Result<(),ForthError> {
         // let mut line = String::new();
 
         let old_in  = std::mem::replace(&mut self.in_stream, Some(r));
@@ -845,18 +887,18 @@ impl<'tf> ToyForth<'tf> {
         Ok(xt)
     }
 
-    fn add_func(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> XT {
+    fn add_func(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> (usize,XT) {
         self.add_function(word,func).unwrap()
     }
 
-    fn add_immed(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> XT {
-        let xt = self.add_function(word,func).unwrap();
+    fn add_immed(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> (usize,XT) {
+        let (ind,xt) = self.add_function(word,func).unwrap();
         self.builtin_immediate().unwrap();
 
-        return xt;
+        return (ind,xt);
     }
 
-    pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<XT,ForthError> {
+    pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<(usize,XT),ForthError> {
         self.add_string(word)?;
         let func_ind = self.ufuncs.len();
 
@@ -866,7 +908,7 @@ impl<'tf> ToyForth<'tf> {
 
         self.ufuncs.push(ForthFunc(func));
         let xt = self.add_primitive(word, Instr::Func(func_ind as u32))?;
-        Ok(xt)
+        Ok((func_ind,xt))
     }
 
     pub fn add_word(&mut self, word: &str, code: &[Instr]) -> Result<XT,ForthError> {
