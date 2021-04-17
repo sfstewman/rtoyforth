@@ -773,7 +773,7 @@ impl<'tf> ToyForth<'tf> {
         self.input.clear();
 
         if let Some(inp) = &mut self.in_stream {
-            let mut r = inp.borrow_mut();
+            let r = inp.borrow();
             let s = &mut self.input;
             r.read_line(s)?;
             if let Some(ch) = s.pop() {
@@ -794,17 +794,17 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::InvalidChar(ch));
         }
 
-        if let Some(out) = &mut self.out_stream {
+        if let Some(out) = &self.out_stream {
             let mut w = out.borrow_mut();
             // let buf : [u8;1] = [ ch as u8 ];
             // w.write(&buf)?;
-            w.write(&[ ch as u8 ]);
+            w.write(&[ ch as u8 ])?;
         }
         Ok(())
     }
 
     pub fn write_prompt(&mut self, prompt: &str) -> Result<(), ForthError> {
-        if let Some(out) = &mut self.out_stream {
+        if let Some(out) = &self.out_stream {
             let mut w = out.borrow_mut();
             write!(w, "{}\n", prompt)?;
             w.flush()?;
