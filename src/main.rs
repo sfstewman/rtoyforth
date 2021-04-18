@@ -309,6 +309,7 @@ enum Instr {
     ControlIndexPop(u8),
     ControlIteration,
     ControlIndexPeek(u32),
+    Execute,
     EOL,
     Lookup,
     DefStr,
@@ -492,6 +493,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("SWAP", Instr::Swap);
         tf.add_prim("OVER", Instr::Over);
 
+        tf.add_prim("EXECUTE", Instr::Execute);
+
         tf.add_prim("+", Instr::BinaryOp(BinOp::Plus));
         tf.add_prim("-", Instr::BinaryOp(BinOp::Minus));
         tf.add_prim("*", Instr::BinaryOp(BinOp::Star));
@@ -551,6 +554,9 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("[", ToyForth::builtin_obracket);
         tf.add_immed("]", ToyForth::builtin_cbracket);
         tf.add_immed("LITERAL", ToyForth::builtin_literal);
+
+        tf.add_func("'", ToyForth::builtin_tick);
+        tf.add_immed("[']", ToyForth::builtin_brak_tick);
 
         // define state variables
         //
@@ -1492,10 +1498,38 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn builtin_tick(&mut self) -> Result<(),ForthError> {
+        let st = self.next_word(' ' as u8, u8::MAX as usize)?;
+
+        let s = self.maybe_string_at(st)?;
+        let xt = self.lookup_word(s)?;
+
+        self.push(xt.to_word())?;
+        Ok(())
+    }
+
+    fn builtin_brak_tick(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        let st = self.next_word(' ' as u8, u8::MAX as usize)?;
+
+        let s = self.maybe_string_at(st)?;
+        let xt = self.lookup_word(s)?;
+
+        self.add_instr(Instr::Push(xt.to_word()));
+        Ok(())
+    }
+
     fn builtin_execute(&mut self) -> Result<(),ForthError> {
-        let xt = self.pop_xt()?;
-        self.ret_push_bye()?;
-        self.exec(xt)
+        if self.compiling() {
+            self.add_instr(Instr::Execute);
+        } else {
+            let xt = self.pop_xt()?;
+            self.ret_push_bye()?;
+            self.exec(xt)?;
+        }
+
+        Ok(())
     }
 
     fn input_lookup(&mut self) -> Result<(), ForthError> {
@@ -2189,6 +2223,11 @@ impl<'tf> ToyForth<'tf> {
                     }
 
                     pc += 1;
+                },
+                Instr::Execute => {
+                    let xt = self.pop_xt()?;
+                    self.rstack.push(Word::xt(pc+1));
+                    pc = xt.0;
                 },
                 Instr::UnaryOp(op) => {
                     self.unary_op(op)?;
@@ -3180,6 +3219,35 @@ I 3   J 3
         let mut forth = ToyForth::new();
         assert!(matches!(forth.interpret(": test2 [ 5 3 + : test3 2 ] literal ;").unwrap_err(),
             ForthError::DefiningWordInvalid));
+    }
+
+    #[test]
+    fn can_interpret_tick_and_bracket_tick() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret(": test 3 + ;").unwrap();
+        let xt = forth.lookup_word("test").unwrap();
+
+        forth.interpret("' test").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_xt().unwrap(), xt);
+
+        forth.interpret("5 ' test EXECUTE").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 8);
+
+        forth.interpret(": test2 5 ['] test EXECUTE ; test2 test").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 11);
+
+        forth.interpret("\
+: test3 5 ' EXECUTE ;
+: test4 5 * 1 + ;
+test3 test
+test3 test4").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 26);
+        assert_eq!(forth.pop_int().unwrap(), 8);
     }
 }
 
