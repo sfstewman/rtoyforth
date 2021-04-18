@@ -323,6 +323,7 @@ enum Instr {
 #[repr(u8)]
 enum UnaryOp {
     Negate,
+    Invert,
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -332,6 +333,11 @@ enum BinOp {
     Minus,
     Star,
     Slash,
+
+    And,
+    Or,
+    Xor,
+
     Greater,
     Less,
     Equal,
@@ -500,7 +506,13 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("*", Instr::BinaryOp(BinOp::Star));
         tf.add_prim("/", Instr::BinaryOp(BinOp::Slash));
 
+        tf.add_prim("AND", Instr::BinaryOp(BinOp::And));
+        tf.add_prim("OR", Instr::BinaryOp(BinOp::Or));
+        tf.add_prim("XOR", Instr::BinaryOp(BinOp::Xor));
+
         tf.add_prim("NEGATE", Instr::UnaryOp(UnaryOp::Negate));
+        tf.add_prim("INVERT", Instr::UnaryOp(UnaryOp::Invert));
+
         tf.add_prim(">", Instr::BinaryOp(BinOp::Greater));
         tf.add_prim("<", Instr::BinaryOp(BinOp::Less));
         tf.add_prim("=", Instr::BinaryOp(BinOp::Equal));
@@ -1321,6 +1333,11 @@ impl<'tf> ToyForth<'tf> {
         let a = self.pop_int()?;
         match op {
             UnaryOp::Negate => { self.push_int(-a)?; Ok(()) },
+            UnaryOp::Invert => {
+                let inverted = !(a as u32);
+                self.push(Word(inverted & Word::INT_MASK))?;
+                Ok(())
+            },
         }
     }
 
@@ -1340,6 +1357,11 @@ impl<'tf> ToyForth<'tf> {
                     return Err(ForthError::DivisionByZero);
                 }
             },
+
+            BinOp::And      => { self.push(Word::int(((a as u32) & (b as u32)) as i32))?; },
+            BinOp::Or       => { self.push(Word::int(((a as u32) | (b as u32)) as i32))?; },
+            BinOp::Xor      => { self.push(Word::int(((a as u32) ^ (b as u32)) as i32))?; },
+
             BinOp::Greater  => { self.push(if a > b  { Word::true_value() } else { Word::false_value() })?; },
             BinOp::Less     => { self.push(if a < b  { Word::true_value() } else { Word::false_value() })?; },
             BinOp::Equal    => { self.push(if a == b { Word::true_value() } else { Word::false_value() })?; },
@@ -3248,6 +3270,68 @@ test3 test4").unwrap();
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), 26);
         assert_eq!(forth.pop_int().unwrap(), 8);
+    }
+
+    #[test]
+    fn bitwise_ops() {
+        let mut forth = ToyForth::new();
+
+        forth.push_int(-1).unwrap();
+        forth.unary_op(UnaryOp::Invert).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.push_int(0x7ff).unwrap();
+        forth.unary_op(UnaryOp::Invert).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), -2048);
+
+        forth.push_int(0).unwrap();
+        forth.unary_op(UnaryOp::Invert).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+
+        forth.push_int(-2048).unwrap();
+        forth.unary_op(UnaryOp::Invert).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0x7ff);
+
+
+        forth.push_int(-1).unwrap();
+        forth.push_int(0x7ff).unwrap();
+        forth.binary_op(BinOp::And).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0x7ff);
+
+        forth.push_int(-1).unwrap();
+        forth.push_int(0x7ff).unwrap();
+        forth.binary_op(BinOp::Or).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+
+        forth.push_int(-1).unwrap();
+        forth.push_int(0x7ff).unwrap();
+        forth.binary_op(BinOp::Xor).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), -2048);
+
+        forth.push_int(0xf3f).unwrap();
+        forth.push_int(0x7ff).unwrap();
+        forth.binary_op(BinOp::And).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0x73f);
+
+        forth.push_int(0xf3f).unwrap();
+        forth.push_int(0x7ff).unwrap();
+        forth.binary_op(BinOp::Or).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0xfff);
+
+        forth.push_int(0xf3f).unwrap();
+        forth.push_int(0x7ff).unwrap();
+        forth.binary_op(BinOp::Xor).unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0x8c0);
     }
 }
 
