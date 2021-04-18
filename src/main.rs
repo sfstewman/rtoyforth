@@ -1340,10 +1340,10 @@ impl<'tf> ToyForth<'tf> {
                     return Err(ForthError::DivisionByZero);
                 }
             },
-            BinOp::Greater  => { self.push(Word::int(if a>b { 1 } else { 0 }))?; },
-            BinOp::Less     => { self.push(Word::int(if a<b { 1 } else { 0 }))?; },
-            BinOp::Equal    => { self.push(Word::int(if a==b { 1 } else { 0 }))?; },
-            BinOp::NotEqual => { self.push(Word::int(if a != b { 1 } else { 0 }))?; },
+            BinOp::Greater  => { self.push(if a > b  { Word::true_value() } else { Word::false_value() })?; },
+            BinOp::Less     => { self.push(if a < b  { Word::true_value() } else { Word::false_value() })?; },
+            BinOp::Equal    => { self.push(if a == b { Word::true_value() } else { Word::false_value() })?; },
+            BinOp::NotEqual => { self.push(if a != b { Word::true_value() } else { Word::false_value() })?; },
         }
 
         return Ok(());
@@ -3020,42 +3020,42 @@ mod tests {
 
         // 5,3
         forth.interpret("5 3 >").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::true_value());
 
         forth.interpret("5 3 <").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop().unwrap(), Word::false_value());
 
         forth.interpret("5 3 =").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop().unwrap(), Word::false_value());
 
         forth.interpret("5 3 <>").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::true_value());
 
         // 3,5
         forth.interpret("3 5 >").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop().unwrap(), Word::false_value());
 
         forth.interpret("3 5 <").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::true_value());
 
         forth.interpret("3 5 =").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop().unwrap(), Word::false_value());
 
         forth.interpret("3 5 <>").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::true_value());
 
         // 3,3
         forth.interpret("3 3 =").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::true_value());
 
         forth.interpret("3 3 >").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop().unwrap(), Word::false_value());
 
         forth.interpret("3 3 <").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop().unwrap(), Word::false_value());
 
         forth.interpret("3 3 <>").unwrap();
-        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop().unwrap(), Word::false_value());
     }
 
     #[test]
