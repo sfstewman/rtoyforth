@@ -411,8 +411,9 @@ enum ForthError {
     VarSpaceOverflow,
     StringSpaceOverflow,
 
-    InvalidCompilerWord,
-    InvalidInterpreterWord,
+    WordInvalidWhileCompiling,
+    WordInvalidWhileInterpreting,
+    DefiningWordInvalid,
     UnfinishedColonDefinition,
     DictEmpty,
 
@@ -457,6 +458,7 @@ impl<'tf> ToyForth<'tf> {
     const ADDR_STATE:      Addr = Addr(0);
     const ADDR_SLASH_CDEF: Addr = Addr(1);
     const ADDR_SLASH_CXT:  Addr = Addr(2);
+    const ADDR_SLASH_BRACKET:  Addr = Addr(3);
 
     pub fn new() -> ToyForth<'tf> {
         let mut tf = ToyForth{
@@ -546,8 +548,16 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("S\"", ToyForth::builtin_s_quote);
         tf.add_immed(".\"", ToyForth::builtin_dot_quote);
 
+        tf.add_immed("[", ToyForth::builtin_obracket);
+        tf.add_immed("]", ToyForth::builtin_cbracket);
+        tf.add_immed("LITERAL", ToyForth::builtin_literal);
+
         // define state variables
-        let state_vars = vec![ "STATE", "/CDEF", "/CXT" ];
+        //
+        // FIXME: instead of /CDEF and /CXT, we should store the nest-sys
+        // on the return stack.
+        //
+        let state_vars = vec![ "STATE", "/CDEF", "/CXT", "/BRACKET" ];
         for v in &state_vars {
             let addr = tf.new_var(Word(0)).unwrap();
             tf.add_prim(v, Instr::Push(addr.to_word()));
@@ -677,14 +687,35 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn compiling(&self) -> bool {
-        return self.vars[0].to_int().unwrap_or(0) != 0;
+        let ind = ToyForth::ADDR_STATE.0 as usize;
+        return self.vars[ind].to_int().unwrap_or(0) != 0;
     }
 
     pub fn check_compiling(&self) -> Result<(), ForthError> {
         if self.compiling() {
             Ok(())
         } else {
-            Err(ForthError::InvalidCompilerWord)
+            Err(ForthError::WordInvalidWhileInterpreting)
+        }
+    }
+
+    pub fn check_interpreting(&self) -> Result<(), ForthError> {
+        if !self.compiling() {
+            Ok(())
+        } else {
+            Err(ForthError::WordInvalidWhileCompiling)
+        }
+    }
+
+    pub fn check_not_in_bracket(&self) -> Result<(), ForthError> {
+        // this should always exist... there's an error in the forth system if
+        // it doesn't...
+        let w = self.get_var_at(ToyForth::ADDR_SLASH_BRACKET).unwrap();
+
+        if w == Word(0) {
+            Ok(())
+        } else {
+            Err(ForthError::DefiningWordInvalid)
         }
     }
 
@@ -1244,7 +1275,7 @@ impl<'tf> ToyForth<'tf> {
         Ok(Addr(addr as u32))
     }
 
-    fn get_var_at(&mut self, addr: Addr) -> Result<Word, ForthError> {
+    fn get_var_at(&self, addr: Addr) -> Result<Word, ForthError> {
         let ind = addr.0 as usize;
 
         if ind >= self.vars.len() {
@@ -1612,6 +1643,8 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_colon(&mut self) -> Result<(), ForthError> {
+        self.check_not_in_bracket()?;
+
         self.push_int(' ' as i32)?;
         self.builtin_parse()?;
 
@@ -1636,9 +1669,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_semi(&mut self) -> Result<(), ForthError> {
-        if !self.compiling() {
-            return Err(ForthError::InvalidInterpreterWord);
-        }
+        self.check_compiling()?;
 
         self.add_instr(Instr::Unnest);
         let st = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?.to_str().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
@@ -1653,6 +1684,29 @@ impl<'tf> ToyForth<'tf> {
         self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0))?;
         self.set_var_at(ToyForth::ADDR_SLASH_CXT, Word(0))?;
         self.set_var_at(ToyForth::ADDR_STATE, Word::int(0))?;
+
+        Ok(())
+    }
+
+    fn builtin_obracket(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+        self.set_var_at(ToyForth::ADDR_SLASH_BRACKET, Word::int(1))?;
+        self.set_var_at(ToyForth::ADDR_STATE, Word::int(0))?;
+        Ok(())
+    }
+
+    fn builtin_cbracket(&mut self) -> Result<(), ForthError> {
+        self.check_interpreting()?;
+        self.set_var_at(ToyForth::ADDR_SLASH_BRACKET, Word::int(0))?;
+        self.set_var_at(ToyForth::ADDR_STATE, Word::int(1))?;
+        Ok(())
+    }
+
+    fn builtin_literal(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+        self.add_instr(Instr::Push(w));
 
         Ok(())
     }
@@ -3103,6 +3157,38 @@ I 3   J 3
             eprintln!("output is\n{}", s);
             assert_eq!(s, "foo bar ");
         }
+    }
+
+    #[test]
+    fn can_use_brackets() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret(": test [ 3 5 + ] literal ;").unwrap();
+        forth.print_word_code("test");
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("test");
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 8);
+    }
+
+    #[test]
+    fn bracket_errors_1() {
+        let mut forth = ToyForth::new();
+        assert!(matches!(forth.interpret("[").unwrap_err(), ForthError::WordInvalidWhileInterpreting));
+    }
+
+    #[test]
+    fn bracket_errors_2() {
+        let mut forth = ToyForth::new();
+        assert!(matches!(forth.interpret(": test ]").unwrap_err(), ForthError::WordInvalidWhileCompiling));
+    }
+
+    #[test]
+    fn bracket_errors_3() {
+        let mut forth = ToyForth::new();
+        assert!(matches!(forth.interpret(": test2 [ 5 3 + : test3 2 ] literal ;").unwrap_err(),
+            ForthError::DefiningWordInvalid));
     }
 }
 
