@@ -1816,47 +1816,56 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    // [CHAR]
-    fn builtin_brak_char(&mut self) -> Result<(), ForthError> {
-        self.check_compiling()?;
-
+    fn next_word(&mut self, delim: u8, max_len: usize) -> Result<ST, ForthError> {
         let off0 = self.input_off;
         let bytes = self.input.as_bytes();
-
-        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], ' ' as u8);
+        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], delim);
 
         let word_off = off0 + w0;
         let word_end = off0 + w1;
         self.input_off = off0 + w2;
 
-        if word_off >= word_end {
+        let len = word_end - word_off;
+        if len >= max_len {
+            return Err(ForthError::StringTooLong);
+        }
+
+        // TODO: Handle large offset by copying to word space?
+        if word_off > 255 {
+            return Err(ForthError::StringTooLong);
+        }
+
+        Ok(ST::input_space(word_off as u8,len as u8))
+    }
+
+    // [CHAR]
+    fn builtin_brak_char(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let st = self.next_word(' ' as u8, u8::MAX as usize)?;
+
+        let b = self.bytes_at(st);
+        if b.len() == 0 {
             return Err(ForthError::InvalidEmptyString);
         }
 
-        let w = Word::int(self.input.as_bytes()[word_off] as i32);
+        let ch = b[0];
+        let w = Word::int(ch as i32);
         self.add_instr(Instr::Push(w));
         Ok(())
     }
 
     fn builtin_char(&mut self) -> Result<(), ForthError> {
-        let off0 = self.input_off;
-        let bytes = self.input.as_bytes();
+        let st = self.next_word(' ' as u8, u8::MAX as usize)?;
 
-        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], ' ' as u8);
-
-        let word_off = off0 + w0;
-        let word_end = off0 + w1;
-        self.input_off = off0 + w2;
-
-        let off = self.input_off+w0;
-        let end = self.input_off+w1;
-
-        if word_off < word_end {
-            self.push_int(self.input.as_bytes()[word_off] as i32)?;
-            Ok(())
-        } else {
-            Err(ForthError::InvalidEmptyString)
+        let b = self.bytes_at(st);
+        if b.len() == 0 {
+            return Err(ForthError::InvalidEmptyString);
         }
+
+        let ch = b[0];
+        self.push_int(ch as i32)?;
+        Ok(())
     }
 
     fn builtin_char_at(&mut self) -> Result<(), ForthError> {
@@ -1875,23 +1884,21 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_word(&mut self) -> Result<(), ForthError> {
         let delim = self.pop_delim()?;
 
-        let off0 = self.input_off;
-        let bytes = self.input.as_bytes();
-        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], delim);
+        let max_len = self.word.len();
+        let st = self.next_word(delim, std::cmp::min(u8::MAX as usize,max_len-1))?;
 
-        let word_off = off0 + w0;
-        let word_end = off0 + w1;
-        self.input_off = off0 + w2;
+        let len = st.len() as usize;
+
+        // if only there was some way to avoid making this copy...
+        let tmp = self.bytes_at(st).to_vec();
 
         let wstr : &mut [u8] = &mut self.word[..];
-
-        let len = word_end - word_off;
         if len+1 >= wstr.len() {
             return Err(ForthError::StringTooLong);
         }
 
         wstr[0] = len as u8;
-        wstr[1..(len+1)].copy_from_slice(&self.input.as_bytes()[word_off..word_end]);
+        wstr[1..(len+1)].copy_from_slice(&tmp);
 
         // self.push(ST::input_space(off as u8,len as u8).to_word())?;
         self.push(ST::word_space(0, (len+1) as u8).to_word())?;
@@ -1901,27 +1908,10 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_parse(&mut self) -> Result<(), ForthError> {
         let delim = self.pop_delim()?;
 
-        let off0 = self.input_off;
-        let bytes = self.input.as_bytes();
-        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], delim);
+        let st = self.next_word(delim, u8::MAX as usize)?;
+        let len = st.len();
 
-        let word_off = off0 + w0;
-        let word_end = off0 + w1;
-        self.input_off = off0 + w2;
-
-        let len = word_end - word_off;
-        let off = word_off;
-
-        if len > 255 {
-            return Err(ForthError::StringTooLong);
-        }
-
-        // TODO: Handle large offset by copying to word space?
-        if off > 255 {
-            return Err(ForthError::StringTooLong);
-        }
-
-        self.push(ST::input_space(off as u8,len as u8).to_word())?;
+        self.push(st.to_word())?;
         self.push_int(len as i32)?;
         Ok(())
     }
