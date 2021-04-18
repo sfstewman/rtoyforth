@@ -1964,7 +1964,8 @@ impl<'tf> ToyForth<'tf> {
 
         if let Some(out) = &self.out_stream {
             let mut w = out.borrow_mut();
-            w.write(s.as_bytes())?;
+            let b = s.as_bytes();
+            w.write(&b[.. std::cmp::min(b.len(), len as usize)])?;
         }
 
         Ok(())
