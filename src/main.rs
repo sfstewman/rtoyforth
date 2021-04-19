@@ -346,12 +346,9 @@ enum BinOp {
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum ControlEntry {
-    /*
     IfAddr(XT),
     ElseAddr(XT),
     LoopAddr(XT),
-    */
-    Addr(XT),
     Index(i32),
 }
 
@@ -608,17 +605,29 @@ impl<'tf> ToyForth<'tf> {
         return tf;
     }
 
-    fn cpush_addr(&mut self, xt: XT) {
-        self.cstack.push(ControlEntry::Addr(xt));
+    fn cpush_if_addr(&mut self, xt: XT) {
+        self.cstack.push(ControlEntry::IfAddr(xt));
+    }
+
+    fn cpush_else_addr(&mut self, xt: XT) {
+        self.cstack.push(ControlEntry::ElseAddr(xt));
+    }
+
+    fn cpush_loop_addr(&mut self, xt: XT) {
+        self.cstack.push(ControlEntry::LoopAddr(xt));
     }
 
     fn cpush_index(&mut self, idx: i32) {
         self.cstack.push(ControlEntry::Index(idx));
     }
 
-    fn cpop_addr(&mut self) -> Result<XT,ForthError> {
-        let ctl = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
-        if let ControlEntry::Addr(xt) = ctl {
+    fn cpop_entry(&mut self) -> Result<ControlEntry,ForthError> {
+        self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)
+    }
+
+    fn cpop_loop_addr(&mut self) -> Result<XT, ForthError> {
+        let ctl = self.cpop_entry()?;
+        if let ControlEntry::LoopAddr(xt) = ctl {
             Ok(xt)
         } else {
             Err(ForthError::InvalidControlEntry(ctl))
@@ -626,7 +635,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn cpop_index(&mut self) -> Result<i32,ForthError> {
-        let ctl = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
+        let ctl = self.cpop_entry()?;
         if let ControlEntry::Index(idx) = ctl {
             Ok(idx)
         } else {
@@ -635,11 +644,11 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn cpeek_index(&mut self) -> Result<i32,ForthError> {
-        let ctl = self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)?;
+        let ctl = self.cstack.last().ok_or(ForthError::ControlStackUnderflow)?;
         if let ControlEntry::Index(idx) = ctl {
-            Ok(idx)
+            Ok(*idx)
         } else {
-            Err(ForthError::InvalidControlEntry(ctl))
+            Err(ForthError::InvalidControlEntry(*ctl))
         }
     }
 
@@ -1772,7 +1781,7 @@ impl<'tf> ToyForth<'tf> {
 
         // add branch, fixup cstack reference later
         let xt = self.add_instr(Instr::BranchOnZero(0));
-        self.cpush_addr(xt);
+        self.cpush_if_addr(xt);
 
         Ok(())
     }
@@ -1781,22 +1790,22 @@ impl<'tf> ToyForth<'tf> {
         self.check_compiling()?;
 
         let xt = self.mark_code();
-        let if_else_xt = self.cpop_addr()?;
 
-        // XXX: check for overflow
-        let delta : i32 = ((xt.0 as i64) - (if_else_xt.0 as i64)) as i32;
-
-        match self.code[if_else_xt.0 as usize] {
-            Instr::Branch(_) => {
-                self.code[if_else_xt.0 as usize] = Instr::Branch(delta);
+        let ctl = self.cpop_entry()?;
+        match ctl {
+            ControlEntry::IfAddr(if_xt) => {
+                // XXX: check for overflow
+                let delta : i32 = ((xt.0 as i64) - (if_xt.0 as i64)) as i32;
+                self.code[if_xt.0 as usize] = Instr::BranchOnZero(delta);
             },
-            Instr::BranchOnZero(_) => {
-                self.code[if_else_xt.0 as usize] = Instr::BranchOnZero(delta);
+            ControlEntry::ElseAddr(else_xt) => {
+                let delta : i32 = ((xt.0 as i64) - (else_xt.0 as i64)) as i32;
+                self.code[else_xt.0 as usize] = Instr::Branch(delta);
             },
             _ => {
-                return Err(ForthError::InvalidControlInstruction(if_else_xt));
-            }
-        }
+                return Err(ForthError::InvalidControlEntry(ctl));
+            },
+        };
 
         Ok(())
     }
@@ -1804,20 +1813,17 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_else(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
-        let if_xt = self.cpop_addr()?;
-        let else_xt = self.add_instr(Instr::Branch(0));
+        let ctl = self.cpop_entry()?;
+        if let ControlEntry::IfAddr(if_xt) = ctl {
+            let else_xt = self.add_instr(Instr::Branch(0));
+            let xt = self.mark_code();
 
-        let xt = self.mark_code();
-        self.cpush_addr(else_xt);
+            let delta : i32 = ((xt.0 as i64) - (if_xt.0 as i64)) as i32;
+            self.code[if_xt.0 as usize] = Instr::BranchOnZero(delta);
 
-        let delta : i32 = ((xt.0 as i64) - (if_xt.0 as i64)) as i32;
-        match self.code[if_xt.0 as usize] {
-            Instr::BranchOnZero(_) => {
-                self.code[if_xt.0 as usize] = Instr::BranchOnZero(delta);
-            },
-            _ => {
-                return Err(ForthError::InvalidControlInstruction(if_xt));
-            }
+            self.cpush_else_addr(else_xt);
+        } else {
+            return Err(ForthError::InvalidControlEntry(ctl));
         }
 
         Ok(())
@@ -1832,14 +1838,14 @@ impl<'tf> ToyForth<'tf> {
         ]);
 
         let xt = self.mark_code();
-        self.cpush_addr(xt);
+        self.cpush_loop_addr(xt);
         Ok(())
     }
 
     fn builtin_loop(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
-        let do_xt = self.cpop_addr()?;
+        let do_xt = self.cpop_loop_addr()?;
 
         // ControlIteration: ( -- 0 | 1 ) (C: n1 n2 -- n1 n3 | )
         // if n2<n1, pushes n1 and n3=n2-1 onto the control stack, pushes 0 onto the data stack
@@ -3081,6 +3087,21 @@ mod tests {
     }
 
     #[test]
+    fn if_then() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret(": foo dup . 5 > if 123 then ;").unwrap();
+        forth.print_word_code("foo");
+
+        forth.interpret("7 foo").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 123);
+
+        forth.interpret("1 foo").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+    }
+
+    #[test]
     fn if_else_then() {
         let mut forth = ToyForth::new();
 
@@ -3332,6 +3353,16 @@ test3 test4").unwrap();
         forth.binary_op(BinOp::Xor).unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 0x8c0);
+    }
+
+    #[test]
+    fn error_mixing_if_and_loop() {
+        let mut forth = ToyForth::new();
+
+        let err = forth.interpret("\
+: test do 5 then ;").unwrap_err();
+
+        assert!(matches!(err, ForthError::InvalidControlEntry(ControlEntry::LoopAddr(_))));
     }
 }
 
