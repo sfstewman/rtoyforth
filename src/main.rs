@@ -580,6 +580,10 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("S\"", ToyForth::builtin_s_quote);
         tf.add_immed(".\"", ToyForth::builtin_dot_quote);
 
+        tf.add_immed(".(", ToyForth::builtin_dot_oparen);
+        tf.add_immed("(", ToyForth::builtin_oparen);
+        tf.add_immed("\\", ToyForth::builtin_backslash);
+
         tf.add_func("/ETYPE", ToyForth::builtin_err_type);
         tf.add_immed("E\"", ToyForth::builtin_err_quote);
 
@@ -2290,6 +2294,40 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    pub fn builtin_dot_oparen(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        // something that bypasses the dictionary and uses a Func instr directly?
+        let type_xt = self.lookup_word("TYPE")?;
+
+        self.push_int(')' as i32)?;
+        self.builtin_parse()?;
+        self.builtin_type()?;
+        Ok(())
+    }
+
+    pub fn builtin_oparen(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        // something that bypasses the dictionary and uses a Func instr directly?
+        let type_xt = self.lookup_word("TYPE")?;
+
+        self.push_int(')' as i32)?;
+        self.builtin_parse()?;
+        self.drop()?;
+        self.drop()?;
+
+        Ok(())
+    }
+
+    pub fn builtin_backslash(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        self.input_off = self.input.len();
+
+        Ok(())
+    }
+
     pub fn builtin_err_quote(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -3808,6 +3846,37 @@ FOO @
 ").unwrap();
 
         forth.interpret("5 FACTORIAL");
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        assert_eq!(forth.pop_int().unwrap(), 120);
+    }
+
+    #[test]
+    fn comments() {
+        let mut forth = ToyForth::new();
+        let outv = Rc::new(RefCell::new(Vec::<u8>::new()));
+
+        forth.capture_interpret("\
+: FACTORIAL  .( Computes factorial )
+    ( n1 -- n2 )
+    DUP 1 > IF              \\ if n > 1, recurse, otherwise return 1
+        DUP 1- RECURSE *    \\ return n * (n-1)!
+    THEN
+;
+", outv.clone()).unwrap();
+
+        forth.capture_interpret("5 FACTORIAL", outv.clone());
+
+        forth.print_word_code("FACTORIAL");
+
+        {
+            let outb = outv.borrow();
+            let s = std::str::from_utf8(&outb).unwrap();
+            assert_eq!(s, "Computes factorial ");
+        }
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
