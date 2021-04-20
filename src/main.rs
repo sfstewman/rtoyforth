@@ -546,6 +546,8 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_immed("BEGIN", ToyForth::builtin_begin);
         tf.add_immed("AGAIN", ToyForth::builtin_again);
+        tf.add_immed("UNTIL", ToyForth::builtin_until);
+
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
         tf.add_func("FIND", ToyForth::builtin_find);
@@ -1923,6 +1925,19 @@ impl<'tf> ToyForth<'tf> {
         let xt = self.mark_code();
         let delta : i32 = ((begin_xt.0 as i64) - (xt.0 as i64)) as i32;
         self.add_instr(Instr::Branch(delta));
+
+        Ok(())
+    }
+
+    fn builtin_until(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let begin_xt = self.cpop_begin_addr()?;
+
+        // branch back to BEGIN
+        let xt = self.mark_code();
+        let delta : i32 = ((begin_xt.0 as i64) - (xt.0 as i64)) as i32;
+        self.add_instr(Instr::BranchOnZero(delta));
 
         Ok(())
     }
@@ -3522,6 +3537,30 @@ test3 test4").unwrap();
         DUP . CR
         DUP /STACKS 28 > IF /STACKS EXIT THEN 
     AGAIN
+;
+
+BAR
+").unwrap();
+
+        forth.print_word_code("bar");
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        assert_eq!(forth.pop_int().unwrap(), 33);
+    }
+
+    #[test]
+    fn begin_until_loop() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+: BAR 3
+    BEGIN
+        5 +
+        DUP . CR
+    DUP 28 > UNTIL
 ;
 
 BAR
