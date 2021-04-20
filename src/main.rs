@@ -624,6 +624,11 @@ impl<'tf> ToyForth<'tf> {
 
 : +! SWAP OVER @ + SWAP ! ;
 
+: NIP  SWAP DROP ;
+: TUCK SWAP OVER ;
+
+: PARSE-NAME BL PARSE ;
+
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
