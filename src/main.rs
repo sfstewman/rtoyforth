@@ -568,6 +568,9 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("S\"", ToyForth::builtin_s_quote);
         tf.add_immed(".\"", ToyForth::builtin_dot_quote);
 
+        tf.add_func("/ETYPE", ToyForth::builtin_err_type);
+        tf.add_immed("E\"", ToyForth::builtin_err_quote);
+
         tf.add_immed("[", ToyForth::builtin_obracket);
         tf.add_immed("]", ToyForth::builtin_cbracket);
         tf.add_immed("LITERAL", ToyForth::builtin_literal);
@@ -2146,11 +2149,32 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    pub fn builtin_err_type(&mut self) -> Result<(),ForthError> {
+        let len = self.pop_int()?;
+        let st = self.pop_str()?;
+
+        let s = self.maybe_string_at(st)?;
+
+        eprintln!("{}", s);
+        Ok(())
+    }
+
     pub fn builtin_dot_quote(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
         // something that bypasses the dictionary and uses a Func instr directly?
         let type_xt = self.lookup_word("TYPE")?;
+
+        self.builtin_s_quote()?;
+        self.add_instr(Instr::DoCol(type_xt));
+        Ok(())
+    }
+
+    pub fn builtin_err_quote(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        // something that bypasses the dictionary and uses a Func instr directly?
+        let type_xt = self.lookup_word("/ETYPE")?;
 
         self.builtin_s_quote()?;
         self.add_instr(Instr::DoCol(type_xt));
