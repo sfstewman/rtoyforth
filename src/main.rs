@@ -351,6 +351,7 @@ enum ControlEntry {
     ElseAddr(XT),
     DoAddr(XT),
     BeginAddr(XT),
+    WhileAddr{ head: XT, cond: XT },
     Index(i32),
 }
 
@@ -547,6 +548,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("BEGIN", ToyForth::builtin_begin);
         tf.add_immed("AGAIN", ToyForth::builtin_again);
         tf.add_immed("UNTIL", ToyForth::builtin_until);
+        tf.add_immed("WHILE", ToyForth::builtin_while);
+        tf.add_immed("REPEAT", ToyForth::builtin_repeat);
 
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
@@ -636,6 +639,10 @@ impl<'tf> ToyForth<'tf> {
         self.cstack.push(ControlEntry::BeginAddr(xt));
     }
 
+    fn cpush_while(&mut self, head_xt: XT, cond_xt: XT) {
+        self.cstack.push(ControlEntry::WhileAddr{ head: head_xt, cond: cond_xt });
+    }
+
     fn cpush_index(&mut self, idx: i32) {
         self.cstack.push(ControlEntry::Index(idx));
     }
@@ -657,6 +664,15 @@ impl<'tf> ToyForth<'tf> {
         let ctl = self.cpop_entry()?;
         if let ControlEntry::BeginAddr(xt) = ctl {
             Ok(xt)
+        } else {
+            Err(ForthError::InvalidControlEntry(ctl))
+        }
+    }
+
+    fn cpop_while_entry(&mut self) -> Result<(XT,XT), ForthError> {
+        let ctl = self.cpop_entry()?;
+        if let ControlEntry::WhileAddr{head:head, cond:cond} = ctl {
+            Ok((head,cond))
         } else {
             Err(ForthError::InvalidControlEntry(ctl))
         }
@@ -1941,6 +1957,39 @@ impl<'tf> ToyForth<'tf> {
         let xt = self.mark_code();
         let delta : i32 = ((begin_xt.0 as i64) - (xt.0 as i64)) as i32;
         self.add_instr(Instr::BranchOnZero(delta));
+
+        Ok(())
+    }
+
+    fn builtin_while(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let begin_xt = self.cpop_begin_addr()?;
+
+        // branch back to BEGIN
+        let xt = self.mark_code();
+        self.add_instr(Instr::BranchOnZero(0));
+
+        self.cpush_while(begin_xt, xt);
+
+        Ok(())
+    }
+
+    fn builtin_repeat(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let (head_xt,cond_xt) : (XT,XT) = self.cpop_while_entry()?;
+
+        // branch back to BEGIN
+        let xt = self.mark_code();
+        let loop_delta : i32 = ((head_xt.0 as i64) - (xt.0 as i64)) as i32;
+        self.add_instr(Instr::Branch(loop_delta));
+
+        // update WHILE branch
+        let post_loop_xt = self.mark_code();
+        let while_delta : i32 = ((post_loop_xt.0 as i64) - (cond_xt.0 as i64)) as i32;
+
+        self.code[cond_xt.0 as usize] = Instr::BranchOnZero(while_delta);
 
         Ok(())
     }
@@ -3597,6 +3646,33 @@ BAR
         assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.pop_int().unwrap(), 33);
+    }
+
+    #[test]
+    fn begin_while_loop() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+: BAR 3
+    BEGIN
+    2 +
+    DUP 28 > INVERT WHILE
+    3 +
+    DUP . CR
+    REPEAT
+    .\" Final: \" DUP . CR
+;
+
+BAR
+").unwrap();
+
+        forth.print_word_code("bar");
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        assert_eq!(forth.pop_int().unwrap(), 30);
     }
 }
 
