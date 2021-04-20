@@ -756,6 +756,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn builtin_at_code(&mut self) -> Result<(),ForthError> {
+        self.push_int(' ' as i32)?;
         self.builtin_parse()?;
 
         let len = self.pop_int()?;
