@@ -3701,12 +3701,13 @@ BAR
         let mut forth = ToyForth::new();
 
         forth.interpret("\
-: BAR 3
+: BAR
+    3
     BEGIN
-    2 +
-    DUP 28 > INVERT WHILE
-    3 +
-    DUP . CR
+        2 +
+        DUP 28 > INVERT WHILE
+        3 +
+        DUP . CR
     REPEAT
     .\" Final: \" DUP . CR
 ;
