@@ -348,7 +348,7 @@ enum BinOp {
 enum ControlEntry {
     IfAddr(XT),
     ElseAddr(XT),
-    LoopAddr(XT),
+    DoAddr(XT),
     Index(i32),
 }
 
@@ -613,8 +613,8 @@ impl<'tf> ToyForth<'tf> {
         self.cstack.push(ControlEntry::ElseAddr(xt));
     }
 
-    fn cpush_loop_addr(&mut self, xt: XT) {
-        self.cstack.push(ControlEntry::LoopAddr(xt));
+    fn cpush_do_addr(&mut self, xt: XT) {
+        self.cstack.push(ControlEntry::DoAddr(xt));
     }
 
     fn cpush_index(&mut self, idx: i32) {
@@ -627,7 +627,7 @@ impl<'tf> ToyForth<'tf> {
 
     fn cpop_loop_addr(&mut self) -> Result<XT, ForthError> {
         let ctl = self.cpop_entry()?;
-        if let ControlEntry::LoopAddr(xt) = ctl {
+        if let ControlEntry::DoAddr(xt) = ctl {
             Ok(xt)
         } else {
             Err(ForthError::InvalidControlEntry(ctl))
@@ -952,6 +952,10 @@ impl<'tf> ToyForth<'tf> {
 
     pub fn stack_depth(&self) -> usize {
         return self.dstack.len();
+    }
+
+    pub fn cstack_depth(&self) -> usize {
+        return self.cstack.len();
     }
 
     pub fn rstack_depth(&self) -> usize {
@@ -1838,7 +1842,7 @@ impl<'tf> ToyForth<'tf> {
         ]);
 
         let xt = self.mark_code();
-        self.cpush_loop_addr(xt);
+        self.cpush_do_addr(xt);
         Ok(())
     }
 
@@ -3362,7 +3366,7 @@ test3 test4").unwrap();
         let err = forth.interpret("\
 : test do 5 then ;").unwrap_err();
 
-        assert!(matches!(err, ForthError::InvalidControlEntry(ControlEntry::LoopAddr(_))));
+        assert!(matches!(err, ForthError::InvalidControlEntry(ControlEntry::DoAddr(_))));
     }
 }
 
