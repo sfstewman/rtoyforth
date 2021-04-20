@@ -529,6 +529,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func(":", ToyForth::builtin_colon);
         tf.add_immed(";", ToyForth::builtin_semi);
 
+        tf.add_immed("EXIT", ToyForth::builtin_exit);
+
         tf.add_immed("[CHAR]", ToyForth::builtin_brak_char);
 
         tf.add_immed("IF", ToyForth::builtin_if);
@@ -1755,6 +1757,21 @@ impl<'tf> ToyForth<'tf> {
         self.set_var_at(ToyForth::ADDR_STATE, Word::int(0))?;
 
         Ok(())
+    }
+
+    fn builtin_exit(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        // TODO: add checks for loops that need to be UNLOOP'd
+        //
+        // TODO: automatically UNLOOP the loops?
+        self.add_instr(Instr::Unnest);
+
+        Ok(())
+    }
+
+    fn builtin_unloop(&mut self) -> Result<(), ForthError> {
+        Err(ForthError::NotImplemented)
     }
 
     fn builtin_obracket(&mut self) -> Result<(), ForthError> {
@@ -3367,6 +3384,54 @@ test3 test4").unwrap();
 : test do 5 then ;").unwrap_err();
 
         assert!(matches!(err, ForthError::InvalidControlEntry(ControlEntry::DoAddr(_))));
+    }
+
+    #[test]
+    fn can_exit_function() {
+        let mut forth = ToyForth::new();
+        let outv = Rc::new(RefCell::new(Vec::<u8>::new()));
+
+        forth.interpret("\
+: FOO
+    DUP . CR
+    1- DUP . CR
+    1- DUP 0> IF
+            DUP . CR
+        ELSE
+            . .\" is less than or equal to zero\" CR EXIT 
+        THEN
+    1- DUP . CR
+    1- . CR
+;").unwrap();
+
+        forth.capture_interpret("7 FOO", outv.clone()).unwrap();
+        {
+            let mut outb = outv.borrow_mut();
+            let s = std::str::from_utf8(&outb).unwrap();
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, "\
+7 
+6 
+5 
+4 
+3 
+");
+            outb.clear();
+    }
+
+        forth.capture_interpret("2 FOO", outv.clone()).unwrap();
+        {
+            let mut outb = outv.borrow_mut();
+            let s = std::str::from_utf8(&outb).unwrap();
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, "\
+2 
+1 
+0 is less than or equal to zero
+");
+
+            outb.clear();
+        }
     }
 }
 
