@@ -350,6 +350,7 @@ enum ControlEntry {
     IfAddr(XT),
     ElseAddr(XT),
     DoAddr(XT),
+    BeginAddr(XT),
     Index(i32),
 }
 
@@ -543,6 +544,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("I", ToyForth::builtin_loop_ind0);
         tf.add_immed("J", ToyForth::builtin_loop_ind1);
 
+        tf.add_immed("BEGIN", ToyForth::builtin_begin);
+        tf.add_immed("AGAIN", ToyForth::builtin_again);
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
         tf.add_func("FIND", ToyForth::builtin_find);
@@ -624,6 +627,10 @@ impl<'tf> ToyForth<'tf> {
         self.cstack.push(ControlEntry::DoAddr(xt));
     }
 
+    fn cpush_begin_addr(&mut self, xt: XT) {
+        self.cstack.push(ControlEntry::BeginAddr(xt));
+    }
+
     fn cpush_index(&mut self, idx: i32) {
         self.cstack.push(ControlEntry::Index(idx));
     }
@@ -635,6 +642,15 @@ impl<'tf> ToyForth<'tf> {
     fn cpop_loop_addr(&mut self) -> Result<XT, ForthError> {
         let ctl = self.cpop_entry()?;
         if let ControlEntry::DoAddr(xt) = ctl {
+            Ok(xt)
+        } else {
+            Err(ForthError::InvalidControlEntry(ctl))
+        }
+    }
+
+    fn cpop_begin_addr(&mut self) -> Result<XT, ForthError> {
+        let ctl = self.cpop_entry()?;
+        if let ControlEntry::BeginAddr(xt) = ctl {
             Ok(xt)
         } else {
             Err(ForthError::InvalidControlEntry(ctl))
@@ -1886,6 +1902,27 @@ impl<'tf> ToyForth<'tf> {
         } else {
             return Err(ForthError::InvalidControlEntry(ctl));
         }
+
+        Ok(())
+    }
+
+    fn builtin_begin(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let xt = self.mark_code();
+        self.cpush_begin_addr(xt);
+        Ok(())
+    }
+
+    fn builtin_again(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let begin_xt = self.cpop_begin_addr()?;
+
+        // branch back to BEGIN
+        let xt = self.mark_code();
+        let delta : i32 = ((begin_xt.0 as i64) - (xt.0 as i64)) as i32;
+        self.add_instr(Instr::Branch(delta));
 
         Ok(())
     }
@@ -3472,6 +3509,31 @@ test3 test4").unwrap();
 
             outb.clear();
         }
+    }
+
+    #[test]
+    fn begin_again_loop() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+: BAR 3
+    BEGIN
+        5 +
+        DUP . CR
+        DUP /STACKS 28 > IF /STACKS EXIT THEN 
+    AGAIN
+;
+
+BAR
+").unwrap();
+
+        forth.print_word_code("bar");
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        assert_eq!(forth.pop_int().unwrap(), 33);
     }
 }
 
