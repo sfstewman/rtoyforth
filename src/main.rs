@@ -558,6 +558,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("WHILE", ToyForth::builtin_while);
         tf.add_immed("REPEAT", ToyForth::builtin_repeat);
 
+        tf.add_immed("RECURSE", ToyForth::builtin_recurse);
+
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
         tf.add_func("FIND", ToyForth::builtin_find);
@@ -1612,6 +1614,14 @@ impl<'tf> ToyForth<'tf> {
     fn ret_push_bye(&mut self) -> Result<(),ForthError> {
         let bye_xt = self.lookup_bye()?;
         self.rstack.push(bye_xt.to_word());
+        Ok(())
+    }
+
+    fn builtin_recurse(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        let xt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?.to_xt().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
+        self.add_instr(Instr::DoCol(xt));
         Ok(())
     }
 
@@ -3778,6 +3788,27 @@ FOO @
         assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.pop_int().unwrap(), 8);
+    }
+
+    #[test]
+    fn recurse() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+: FACTORIAL 
+    DUP 1 > IF
+        DUP 1- RECURSE *
+    THEN
+;
+").unwrap();
+
+        forth.interpret("5 FACTORIAL");
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        assert_eq!(forth.pop_int().unwrap(), 120);
     }
 }
 
