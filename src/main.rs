@@ -620,6 +620,8 @@ impl<'tf> ToyForth<'tf> {
 
 : ABS DUP 0< IF NEGATE THEN ;
 
+: +! SWAP OVER @ + SWAP ! ;
+
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
@@ -3758,6 +3760,24 @@ BAR
         assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.pop_int().unwrap(), 128);
+    }
+
+    #[test]
+    fn plus_bang() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+VARIABLE FOO
+3 FOO !
+5 FOO +!
+FOO @
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        assert_eq!(forth.pop_int().unwrap(), 8);
     }
 }
 
