@@ -306,7 +306,7 @@ enum Instr {
     Branch(i32),
     BranchOnZero(i32),  // branches if stack top is 0
     ControlIndexPush(u8),
-    ControlIndexPop(u8),
+    ControlIndexDrop(u8),
     ControlIteration,
     ControlIndexPeek(u32),
     Execute,
@@ -349,9 +349,12 @@ enum BinOp {
 enum ControlEntry {
     IfAddr(XT),
     ElseAddr(XT),
+
     DoAddr(XT),
     BeginAddr(XT),
     WhileAddr{ head: XT, cond: XT },
+    LeaveAddr{ head: XT, leave: XT },
+
     Index(i32),
 }
 
@@ -423,6 +426,8 @@ enum ForthError {
     DefiningWordInvalid,
     UnfinishedColonDefinition,
     DictEmpty,
+
+    NoMatchingLoopHead,
 
     NotImplemented,
 
@@ -544,6 +549,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("LOOP", ToyForth::builtin_loop);
         tf.add_immed("I", ToyForth::builtin_loop_ind0);
         tf.add_immed("J", ToyForth::builtin_loop_ind1);
+
+        tf.add_immed("LEAVE", ToyForth::builtin_leave);
 
         tf.add_immed("BEGIN", ToyForth::builtin_begin);
         tf.add_immed("AGAIN", ToyForth::builtin_again);
@@ -1995,6 +2002,25 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn builtin_leave(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        /* search the control stack for the last loop entry
+         *
+         * XXX: important when allowing colon-within-colon
+         *      that we protect the control stack across
+         *      colon-defs.
+         */
+
+        let (i,do_xt) = self.cstack.iter().copied().enumerate().rev().find_map(
+            |(i,itm)| if let ControlEntry::DoAddr(xt) = itm { Some((i,xt)) } else { None }).ok_or(ForthError::NoMatchingLoopHead)?;
+
+        self.add_instr(Instr::ControlIndexDrop(2));
+        let leave_xt = self.add_instr(Instr::Branch(0));
+        self.cstack[i] = ControlEntry::LeaveAddr{ head: do_xt, leave: leave_xt };
+        Ok(())
+    }
+
     fn builtin_do(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -2011,7 +2037,24 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_loop(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
-        let do_xt = self.cpop_loop_addr()?;
+        let mut do_xt = XT(0);
+        let mut leave_xts : Vec<XT> = Vec::new();
+
+        let entry = self.cpop_entry()?;
+        match entry {
+            ControlEntry::DoAddr(xt) => {
+                do_xt = xt;
+            },
+
+            ControlEntry::LeaveAddr{head:xt, leave: leave_xt} => {
+                do_xt = xt;
+                leave_xts.push(leave_xt);
+            },
+
+            _ => {
+                return Err(ForthError::InvalidControlEntry(entry));
+            },
+        };
 
         // ControlIteration: ( -- 0 | 1 ) (C: n1 n2 -- n1 n3 | )
         // if n2<n1, pushes n1 and n3=n2-1 onto the control stack, pushes 0 onto the data stack
@@ -2019,9 +2062,19 @@ impl<'tf> ToyForth<'tf> {
         self.add_instr(Instr::ControlIteration);
 
         // branch back to DO (after loop header)
-        let xt = self.mark_code();
-        let delta : i32 = ((do_xt.0 as i64) - (xt.0 as i64)) as i32;
-        self.add_instr(Instr::BranchOnZero(delta));
+        {
+            let xt = self.mark_code();
+            let delta : i32 = ((do_xt.0 as i64) - (xt.0 as i64)) as i32;
+            self.add_instr(Instr::BranchOnZero(delta));
+        }
+
+        {
+            let after_xt = self.mark_code();
+            for xt in leave_xts {
+                let delta = ((after_xt.0 as i64) - (xt.0 as i64)) as i32;
+                self.code[xt.0 as usize] = Instr::Branch(delta);
+            }
+        }
 
         Ok(())
     }
@@ -2377,21 +2430,15 @@ impl<'tf> ToyForth<'tf> {
 
                     pc += 1;
                 },
-                Instr::ControlIndexPop(count) => {
+                Instr::ControlIndexDrop(count) => {
                     if count > 0 {
                         let clen = self.cstack.len();
-                        if clen < count as usize {
+                        let ccnt = count as usize;
+                        if clen < ccnt {
                             return Err(ForthError::ControlStackUnderflow);
                         }
 
-                        let i0 = clen-(count as usize);
-                        for itm in self.cstack.drain(i0..) {
-                            if let ControlEntry::Index(index) = itm {
-                                self.dstack.push(Word::int(index));
-                            } else {
-                                return Err(ForthError::InvalidControlEntry(itm));
-                            }
-                        }
+                        self.cstack.truncate(clen-ccnt);
                     }
 
                     pc += 1;
@@ -3674,6 +3721,42 @@ BAR
         assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.pop_int().unwrap(), 30);
+    }
+
+    #[test]
+    fn do_loop_with_leave() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+: BAR
+    1
+    10 0 DO
+        OVER *
+        DUP 100 > IF LEAVE THEN
+        .\" Iteration \" I .  .\" Value \" DUP . CR
+        /STACKS
+    LOOP
+    SWAP DROP
+    /STACKS
+    .\" Final: \" DUP . CR
+;
+").unwrap();
+
+        forth.print_word_code("BAR");
+
+        forth.interpret("5 BAR");
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        assert_eq!(forth.pop_int().unwrap(), 125);
+
+        forth.interpret("2 BAR");
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        assert_eq!(forth.pop_int().unwrap(), 128);
     }
 }
 
