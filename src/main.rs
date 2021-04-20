@@ -316,6 +316,7 @@ enum Instr {
     DefWord,
     Func(u32),
     DoCol(XT),
+    Exit,               // redundant with Unnest... but Unnest currently marks the end of a function
     Unnest,
 }
 
@@ -569,6 +570,10 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("'", ToyForth::builtin_tick);
         tf.add_immed("[']", ToyForth::builtin_brak_tick);
 
+        // debugging
+        tf.add_func("/STACKS", ToyForth::builtin_at_stacks);
+        tf.add_func("/CODE", ToyForth::builtin_at_code);
+
         // define state variables
         //
         // FIXME: instead of /CDEF and /CXT, we should store the nest-sys
@@ -655,8 +660,26 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn print_code(&self, xt: XT) {
+        use std::collections::HashMap;
+
+        let mut xt_map = HashMap::<u32,&str>::with_capacity(self.dict.len());
+        for ent in &self.dict {
+            let w = self.string_at(ent.st);
+            xt_map.insert(ent.xt.0, w);
+        };
+
         for (i,instr) in self.code[xt.0 as usize..].iter().enumerate() {
-            eprintln!("[{:3}] {:?}", i, instr);
+            let istr = format!("{:?}", instr);
+            match instr {
+                Instr::DoCol(xt) => {
+                    let name = xt_map[&xt.0];
+                    eprintln!("[{:3}] {:40}  | {}", i, istr, name);
+                },
+                _ => {
+                    eprintln!("[{:3}] {:40}", i, istr);
+                }
+            };
+
             if let Instr::Unnest = *instr {
                 break
             }
@@ -693,6 +716,23 @@ impl<'tf> ToyForth<'tf> {
             eprintln!("[C {:3}] {:?}", i, itm);
         }
         eprintln!("done\n");
+    }
+
+    pub fn builtin_at_code(&mut self) -> Result<(),ForthError> {
+        self.builtin_parse()?;
+
+        let len = self.pop_int()?;
+        let st = self.pop_str()?;
+
+        let w = self.maybe_string_at(st)?;
+
+        self.print_word_code(w);
+        Ok(())
+    }
+
+    pub fn builtin_at_stacks(&mut self) -> Result<(),ForthError> {
+        self.print_stacks("[ /STACKS ]");
+        Ok(())
     }
 
     pub fn capture_interpret(&mut self, s: &str, w: Rc<RefCell<dyn std::io::Write>>) -> Result<(),ForthError> {
@@ -1765,7 +1805,7 @@ impl<'tf> ToyForth<'tf> {
         // TODO: add checks for loops that need to be UNLOOP'd
         //
         // TODO: automatically UNLOOP the loops?
-        self.add_instr(Instr::Unnest);
+        self.add_instr(Instr::Exit);
 
         Ok(())
     }
@@ -2319,7 +2359,7 @@ impl<'tf> ToyForth<'tf> {
                     self.rstack.push(Word::xt(pc+1));
                     pc = new_pc.0;
                 },
-                Instr::Unnest => {
+                Instr::Exit|Instr::Unnest => {
                     let val = self.rstack.pop().ok_or(ForthError::ReturnStackUnderflow)?;
                     let ret = val.to_xt().ok_or_else(|| ForthError::InvalidExecutionToken(val))?;
                     pc = ret.0;
