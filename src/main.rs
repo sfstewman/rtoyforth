@@ -704,6 +704,9 @@ impl<'tf> ToyForth<'tf> {
     -       ( num prod        -- rem )
 ;
 
+\\ Should this be a builtin?
+: ?DUP DUP 0<> IF DUP THEN ;
+
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
@@ -4369,6 +4372,25 @@ MSB 2/ MSB AND \\ 0
 
         forth.interpret("ROT").unwrap();    // ( 0  2  4  5  7 *3* 6  1 -- 0  2  4  5  7 *6* 1  3 )
         check_eq(&forth, &[0,2,4,5,7,6,1,3]);
+    }
+
+    #[test]
+    fn qdup_duplicates_non_zeros() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("123 ?DUP").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 123);
+        assert_eq!(forth.pop_int().unwrap(), 123);
+
+        forth.interpret("-5 ?DUP").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -5);
+        assert_eq!(forth.pop_int().unwrap(), -5);
+
+        forth.interpret("0 ?DUP").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
     }
 }
 
