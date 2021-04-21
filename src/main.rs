@@ -418,6 +418,7 @@ enum ForthError {
     InvalidEmptyString,
     StringTooLong,
     StringOffsetTooLarge,
+    StringNotFound,
 
     FunctionSpaceOverflow,
     DictSpaceOverflow,
@@ -434,7 +435,6 @@ enum ForthError {
 
     NotImplemented,
 
-    StringNotFound,
     WordNotFound(ST),
 
     InvalidCell(XT),
@@ -810,7 +810,7 @@ impl<'tf> ToyForth<'tf> {
         self.push_int(' ' as i32)?;
         self.builtin_parse()?;
 
-        let len = self.pop_int()?;
+        let _len = self.pop_int()?;
         let st = self.pop_str()?;
 
         let w = self.maybe_string_at(st)?;
@@ -2102,7 +2102,7 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_loop(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
-        let mut do_xt = XT(0);
+        let do_xt : XT;
         let mut leave_xts : Vec<XT> = Vec::new();
 
         let entry = self.cpop_entry()?;
@@ -2318,7 +2318,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn builtin_err_type(&mut self) -> Result<(),ForthError> {
-        let len = self.pop_int()?;
+        let _len = self.pop_int()?;
         let st = self.pop_str()?;
 
         let s = self.maybe_string_at(st)?;
@@ -2341,9 +2341,6 @@ impl<'tf> ToyForth<'tf> {
     pub fn builtin_dot_oparen(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
-        // something that bypasses the dictionary and uses a Func instr directly?
-        let type_xt = self.lookup_word("TYPE")?;
-
         self.push_int(')' as i32)?;
         self.builtin_parse()?;
         self.builtin_type()?;
@@ -2352,9 +2349,6 @@ impl<'tf> ToyForth<'tf> {
 
     pub fn builtin_oparen(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
-
-        // something that bypasses the dictionary and uses a Func instr directly?
-        let type_xt = self.lookup_word("TYPE")?;
 
         self.push_int(')' as i32)?;
         self.builtin_parse()?;
