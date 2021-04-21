@@ -643,6 +643,7 @@ impl<'tf> ToyForth<'tf> {
         // Add builtins
         tf.add_prim(">IN",    Instr::Push(ToyForth::ADDR_IN.to_word()));
 
+        tf.add_func("DEPTH",  ToyForth::builtin_depth);
         tf.add_func("HERE",   ToyForth::builtin_here);
         tf.add_func("UNUSED", ToyForth::builtin_unused);
 
@@ -2441,6 +2442,13 @@ impl<'tf> ToyForth<'tf> {
 
         self.builtin_s_quote()?;
         self.add_instr(Instr::DoCol(type_xt));
+        Ok(())
+    }
+
+    pub fn builtin_depth(&mut self) -> Result<(),ForthError> {
+        let depth = self.dstack.len();
+        // TODO: check for overflow!
+        self.push_int(depth as i32)?;
         Ok(())
     }
 
@@ -4260,6 +4268,20 @@ MSB 2/ MSB AND \\ 0
         assert_eq!(forth.pop_int().unwrap(),  1); // 10 3 MOD \\  1
         assert_eq!(forth.pop_int().unwrap(), -1); // -5 2 MOD \\ -1
         assert_eq!(forth.pop_int().unwrap(),  1); //  5 2 MOD \\  1
+    }
+
+    #[test]
+    fn depth() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("DEPTH").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("1 DEPTH").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret("2 3 DEPTH").unwrap();
+        assert_eq!(forth.pop_int().unwrap(), 3);
     }
 }
 
