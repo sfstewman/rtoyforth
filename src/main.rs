@@ -1424,13 +1424,13 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
-    fn pick(&mut self, dist: u32) -> Result<(), ForthError> {
+    fn pick(&mut self, dist: usize) -> Result<(), ForthError> {
         let len = self.dstack.len();
-        if dist as usize >= len {
+        if dist >= len {
             return Err(ForthError::StackUnderflow);
         }
 
-        let val = self.dstack[len-1-(dist as usize)];
+        let val = self.dstack[len-1-dist];
         self.dstack.push(val);
         Ok(())
     }
@@ -2584,7 +2584,7 @@ impl<'tf> ToyForth<'tf> {
                 },
                 Instr::Pick => {
                     let u = self.pop_uint()?;
-                    self.pick(u)?;
+                    self.pick(u as usize)?;
                     pc += 1;
                 },
                 Instr::Dup => {
