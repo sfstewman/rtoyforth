@@ -678,6 +678,9 @@ impl<'tf> ToyForth<'tf> {
 : MIN ( n1 n1 -- n3 ) 2DUP > IF SWAP THEN DROP ;
 : MAX ( n1 n1 -- n3 ) 2DUP < IF SWAP THEN DROP ;
 
+\\ From the forth-standard.org discussion of the word
+: WITHIN ( test low high -- flag ) OVER - >R - R> U< ;
+
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
@@ -4098,6 +4101,44 @@ FOO @
         assert_eq!(forth.pop_int().unwrap(),  3);
         assert_eq!(forth.pop_int().unwrap(), -2);
         assert_eq!(forth.pop_int().unwrap(),  2);
+    }
+
+    #[test]
+    fn within_works_on_signed_and_unsigned() {
+        let mut forth = ToyForth::new();
+        forth.interpret("\
+ 5  0 10 WITHIN \\ easy one, all positive
+15  0 10 WITHIN \\ outside of range
+-5  0 10 WITHIN \\ outside of range
+ 5 10  0 WITHIN \\ flip order
+
+-2 -3 -1 WITHIN \\ negative
+-4 -3 -1 WITHIN \\ negative: outside of range
+ 3 -3 -1 WITHIN \\ negative: outside of range
+-2 -1 -3 WITHIN \\ negative: flip order
+
+ 0 -5  5 WITHIN \\ sign change
+ 6 -5  5 WITHIN \\ sign change: outside of range
+-6 -5  5 WITHIN \\ sign change: outside of range
+ 0  5 -5 WITHIN \\ sign change: flip order
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 12);
+
+        assert_eq!(forth.pop_int().unwrap(),  0); //  0  5 -5 WITHIN \\ sign change: flip order
+        assert_eq!(forth.pop_int().unwrap(),  0); // -6 -5  5 WITHIN \\ sign change: outside of range
+        assert_eq!(forth.pop_int().unwrap(),  0); //  6 -5  5 WITHIN \\ sign change: outside of range
+        assert_eq!(forth.pop_int().unwrap(), -1); //  0 -5  5 WITHIN \\ sign change
+        
+        assert_eq!(forth.pop_int().unwrap(),  0); // -2 -1 -3 WITHIN \\ negative: flip order
+        assert_eq!(forth.pop_int().unwrap(),  0); //  3 -3 -1 WITHIN \\ negative: outside of range
+        assert_eq!(forth.pop_int().unwrap(),  0); // -4 -3 -1 WITHIN \\ negative: outside of range
+        assert_eq!(forth.pop_int().unwrap(), -1); // -2 -3 -1 WITHIN \\ negative
+
+        assert_eq!(forth.pop_int().unwrap(),  0); //  5 10  0 WITHIN \\ flip order
+        assert_eq!(forth.pop_int().unwrap(),  0); // -5  0 10 WITHIN \\ outside of range
+        assert_eq!(forth.pop_int().unwrap(),  0); // 15  0 10 WITHIN \\ outside of range
+        assert_eq!(forth.pop_int().unwrap(), -1); //  5  0 10 WITHIN \\ easy one, all positive
     }
 }
 
