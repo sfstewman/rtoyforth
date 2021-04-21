@@ -315,6 +315,9 @@ enum Instr {
     ControlIndexDrop(u8),
     ControlIteration,
     ControlIndexPeek(u32),
+    ReturnPush,
+    ReturnPop,
+    ReturnCopy,
     Execute,
     EOL,
     Lookup,
@@ -586,8 +589,9 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func(">NUMBER", ToyForth::builtin_to_number);
 
         // should these be prims?
-        tf.add_func(">R", ToyForth::builtin_data_to_ret);
-        tf.add_func("R>", ToyForth::builtin_ret_to_data);
+        tf.add_immed(">R", ToyForth::builtin_data_to_ret);
+        tf.add_immed("R>", ToyForth::builtin_ret_to_data);
+        tf.add_immed("R@", ToyForth::builtin_ret_copy_to_data);
 
         tf.add_func("CONSTANT", ToyForth::builtin_constant);
         tf.add_func("VARIABLE", ToyForth::builtin_variable);
@@ -906,7 +910,7 @@ impl<'tf> ToyForth<'tf> {
                     break;
                 }
 
-                self.builtin_data_to_ret()?;    // ( caddr u -- caddr )           r: ( -- u )
+                self.data_to_ret()?;    // ( caddr u -- caddr )           r: ( -- u )
                 self.dup()?;                    // ( caddr -- caddr caddr )       r: ( u -- u )
                 self.builtin_char_at()?;        // ( caddr caddr -- caddr ch )    r: ( u -- u )
                 self.push_int('-' as i32)?;     // ( caddr ch -- caddr ch '-' )   r: ( u -- u )
@@ -918,20 +922,20 @@ impl<'tf> ToyForth<'tf> {
 
                 if self.pop_int()? != 0 {       // ( neg? caddr neg? -- neg? caddr ) r: ( u -- u )
                     self.builtin_char_plus()?;  // ( neg? caddr -- neg? caddr2 )
-                    self.builtin_ret_to_data()?; // ( neg? caddr2 -- neg? caddr2 u ) r: ( u -- )
+                    self.ret_to_data()?; // ( neg? caddr2 -- neg? caddr2 u ) r: ( u -- )
                     let u = self.pop_int()?;    // ( neg? caddr2 u -- neg? caddr2 ) r: ( -- )
                     self.push_int(u - 1)?;      // ( neg? caddr2 -- neg? caddr2 u2 ) r: ( -- )
 
                     len -= 1;
 
-                    self.builtin_data_to_ret()?;    // ( neg? caddr2 u2 -- neg? caddr2 )  r: ( -- u2 )
+                    self.data_to_ret()?;    // ( neg? caddr2 u2 -- neg? caddr2 )  r: ( -- u2 )
                     // self.print_stacks("-2-");
                 }
 
                 self.push_int(0)?;              // ( neg? caddr -- neg? caddr 0 ) r: ( u -- u )
                 self.swap()?;                   // ( neg? caddr 0 -- neg? 0 caddr ) r: ( u -- u )
 
-                self.builtin_ret_to_data()?;    // ( neg? 0 caddr -- neg? 0 caddr u ) r: ( u -- )
+                self.ret_to_data()?;    // ( neg? 0 caddr -- neg? 0 caddr u ) r: ( u -- )
 
                 // self.print_stacks("-3-");
                 self.builtin_to_number()?;      // ( neg? 0 caddr u1 -- neg? ud caddr u2 )
@@ -1424,15 +1428,39 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
-    fn builtin_data_to_ret(&mut self) -> Result<(), ForthError> {
+    fn data_to_ret(&mut self) -> Result<(), ForthError> {
         let w = self.dstack.pop().ok_or(ForthError::StackUnderflow)?;
         self.rstack.push(w);
         Ok(())
     }
 
-    fn builtin_ret_to_data(&mut self) -> Result<(), ForthError> {
+    fn ret_to_data(&mut self) -> Result<(), ForthError> {
         let w = self.rstack.pop().ok_or(ForthError::StackUnderflow)?;
         self.dstack.push(w);
+        Ok(())
+    }
+
+    fn ret_copy_to_data(&mut self) -> Result<(), ForthError> {
+        let w = self.rstack.last().ok_or(ForthError::StackUnderflow)?;
+        self.dstack.push(*w);
+        Ok(())
+    }
+
+    fn builtin_data_to_ret(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+        self.add_instr(Instr::ReturnPush);
+        Ok(())
+    }
+
+    fn builtin_ret_to_data(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+        self.add_instr(Instr::ReturnPop);
+        Ok(())
+    }
+
+    fn builtin_ret_copy_to_data(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+        self.add_instr(Instr::ReturnCopy);
         Ok(())
     }
 
@@ -2608,6 +2636,18 @@ impl<'tf> ToyForth<'tf> {
 
                     pc += 1;
                 },
+                Instr::ReturnPush => {
+                    self.data_to_ret()?;
+                    pc += 1;
+                },
+                Instr::ReturnPop => {
+                    self.ret_to_data()?;
+                    pc += 1;
+                },
+                Instr::ReturnCopy => {
+                    self.ret_copy_to_data()?;
+                    pc += 1;
+                },
                 Instr::Execute => {
                     let xt = self.pop_xt()?;
                     self.rstack.push(Word::xt(pc+1));
@@ -3300,8 +3340,8 @@ mod tests {
         let mut forth = ToyForth::new();
 
         // handle underflow
-        assert!(matches!(forth.builtin_data_to_ret().unwrap_err(), ForthError::StackUnderflow));
-        assert!(matches!(forth.builtin_ret_to_data().unwrap_err(), ForthError::StackUnderflow));
+        assert!(matches!(forth.data_to_ret().unwrap_err(), ForthError::StackUnderflow));
+        assert!(matches!(forth.ret_to_data().unwrap_err(), ForthError::StackUnderflow));
 
         forth.push_int(1).unwrap();
         forth.push_int(2).unwrap();
@@ -3309,7 +3349,7 @@ mod tests {
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.rstack_depth(), 0);
 
-        forth.builtin_data_to_ret().unwrap();
+        forth.data_to_ret().unwrap();
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.rstack_depth(), 1);
@@ -3318,7 +3358,7 @@ mod tests {
         assert_eq!(forth.rstack.last().map(|x| *x).unwrap(), Word::int(2));
 
         forth.push_int(3).unwrap();
-        forth.builtin_ret_to_data().unwrap();
+        forth.ret_to_data().unwrap();
 
         assert_eq!(forth.stack_depth(), 3);
         assert_eq!(forth.rstack_depth(), 0);
@@ -4036,6 +4076,30 @@ FOO @
 
         assert_eq!(forth.pop_int().unwrap(), 0); //    5    10 U>
         assert_eq!(forth.pop_int().unwrap(),-1); //    5    10 U<
+    }
+
+    #[test]
+    fn return_stack_words() {
+        let mut forth = ToyForth::new();
+        forth.interpret("\
+: MYOVER ( n1 n2 -- n1 n2 n1 ) >R DUP R> SWAP ;
+1 2 3 MYOVER \\ ( 1 2 3 -- 1 2 3 2 )
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 4);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret(": TESTR@ ( a b c -- b a-c c ) >R SWAP R@ - R> ;").unwrap();
+        forth.print_word_code("TESTR@");
+        forth.interpret("1 2 3 TESTR@").unwrap();
+
+        assert_eq!(forth.stack_depth(), 3);
+        assert_eq!(forth.pop_int().unwrap(),  3);
+        assert_eq!(forth.pop_int().unwrap(), -2);
+        assert_eq!(forth.pop_int().unwrap(),  2);
     }
 }
 
