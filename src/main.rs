@@ -305,6 +305,8 @@ enum Instr {
     Push(Word),
     Drop,
     Pick,
+    Roll,
+    Rot,
     Dup,
     Swap,
     Over,
@@ -527,6 +529,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("SWAP", Instr::Swap);
         tf.add_prim("OVER", Instr::Over);
         tf.add_prim("PICK", Instr::Pick);
+        tf.add_prim("ROLL", Instr::Roll);
+        tf.add_prim("ROT",  Instr::Rot);
 
         tf.add_prim("EXECUTE", Instr::Execute);
 
@@ -1431,6 +1435,18 @@ impl<'tf> ToyForth<'tf> {
         }
 
         let val = self.dstack[len-1-dist];
+        self.dstack.push(val);
+        Ok(())
+    }
+
+    fn roll(&mut self, dist: usize) -> Result<(), ForthError> {
+        let len = self.dstack.len();
+        if dist >= len {
+            return Err(ForthError::StackUnderflow);
+        }
+
+        let ind = len - 1 - dist;
+        let val = self.dstack.remove(ind);
         self.dstack.push(val);
         Ok(())
     }
@@ -2585,6 +2601,15 @@ impl<'tf> ToyForth<'tf> {
                 Instr::Pick => {
                     let u = self.pop_uint()?;
                     self.pick(u as usize)?;
+                    pc += 1;
+                },
+                Instr::Roll => {
+                    let u = self.pop_uint()?;
+                    self.roll(u as usize)?;
+                    pc += 1;
+                },
+                Instr::Rot => {
+                    self.roll(2)?;
                     pc += 1;
                 },
                 Instr::Dup => {
@@ -4319,6 +4344,31 @@ MSB 2/ MSB AND \\ 0
         forth.interpret("2 PICK").unwrap();
         assert_eq!(forth.stack_depth(), 4);
         assert_eq!(forth.pop_int().unwrap(), 1);
+    }
+
+    #[test]
+    fn roll_and_rot() {
+        let mut forth = ToyForth::new();
+
+        fn check_eq(forth: &ToyForth, vals: &[isize]) {
+            assert_eq!(forth.dstack,
+                       vals.iter().map(
+                           |x| Word::int(*x as i32)
+                        ).collect::<Vec<Word>>());
+        }
+
+        forth.interpret("0 1 2 3 4 5 6 7").unwrap();  // load stack
+        forth.interpret("4 ROLL").unwrap(); // ( 0  1  2 *3* 4  5  6  7 -- 0  1  2 *4* 5  6  7  3 )
+        check_eq(&forth, &[0,1,2,4,5,6,7,3]);
+
+        forth.interpret("2 ROLL").unwrap(); // ( 0  1  2  4  5 *6* 7  3 -- 0  1  2  4  5 *7* 3  6 )
+        check_eq(&forth, &[0,1,2,4,5,7,3,6]);
+
+        forth.interpret("6 ROLL").unwrap(); // ( 0 *1* 2  4  5  7  3  6 -- 0 *2* 4  5  7  3  6  1 )
+        check_eq(&forth, &[0,2,4,5,7,3,6,1]);
+
+        forth.interpret("ROT").unwrap();    // ( 0  2  4  5  7 *3* 6  1 -- 0  2  4  5  7 *6* 1  3 )
+        check_eq(&forth, &[0,2,4,5,7,6,1,3]);
     }
 }
 
