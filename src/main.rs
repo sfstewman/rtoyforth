@@ -2400,8 +2400,6 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn builtin_backslash(&mut self) -> Result<(),ForthError> {
-        self.check_compiling()?;
-
         self.input_off = self.input.len();
 
         Ok(())
