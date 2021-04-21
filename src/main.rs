@@ -3634,7 +3634,7 @@ I 3   J 3
         forth.print_word_code("test");
         assert_eq!(forth.stack_depth(), 0);
 
-        forth.interpret("test");
+        forth.interpret("test").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 8);
     }
@@ -3905,14 +3905,14 @@ BAR
 
         forth.print_word_code("BAR");
 
-        forth.interpret("5 BAR");
+        forth.interpret("5 BAR").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
         assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.pop_int().unwrap(), 125);
 
-        forth.interpret("2 BAR");
+        forth.interpret("2 BAR").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
         assert_eq!(forth.rstack_depth(), 0);
@@ -3950,7 +3950,7 @@ FOO @
 ;
 ").unwrap();
 
-        forth.interpret("5 FACTORIAL");
+        forth.interpret("5 FACTORIAL").unwrap();
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
@@ -3973,7 +3973,7 @@ FOO @
 ;
 ", outv.clone()).unwrap();
 
-        forth.capture_interpret("5 FACTORIAL", outv.clone());
+        forth.capture_interpret("5 FACTORIAL", outv.clone()).unwrap();
 
         forth.print_word_code("FACTORIAL");
 
