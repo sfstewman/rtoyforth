@@ -355,6 +355,9 @@ enum BinOp {
 
     UnsignedGreater,
     UnsignedLess,
+
+    LeftShift,
+    RightShift,
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -537,6 +540,9 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("NEGATE", Instr::UnaryOp(UnaryOp::Negate));
         tf.add_prim("INVERT", Instr::UnaryOp(UnaryOp::Invert));
 
+        tf.add_prim("LSHIFT", Instr::BinaryOp(BinOp::LeftShift));
+        tf.add_prim("RSHIFT", Instr::BinaryOp(BinOp::RightShift));
+
         tf.add_prim(">", Instr::BinaryOp(BinOp::Greater));
         tf.add_prim("<", Instr::BinaryOp(BinOp::Less));
         tf.add_prim("=", Instr::BinaryOp(BinOp::Equal));
@@ -680,6 +686,9 @@ impl<'tf> ToyForth<'tf> {
 
 \\ From the forth-standard.org discussion of the word
 : WITHIN ( test low high -- flag ) OVER - >R - R> U< ;
+
+: 2* 1 LSHIFT ;
+: 2/ 1 RSHIFT ;
 
 ").unwrap();
 
@@ -1560,6 +1569,15 @@ impl<'tf> ToyForth<'tf> {
 
             BinOp::UnsignedGreater => { self.push(Word::bool( (a as u32) > (b as u32) ))?; },
             BinOp::UnsignedLess    => { self.push(Word::bool( (a as u32) < (b as u32) ))?; },
+
+            BinOp::LeftShift  => {
+                // TODO: check b for range
+                self.push(Word( ((a as u32) << (b as u32)) & Word::INT_MASK ))?;
+            },
+            BinOp::RightShift => {
+                // TODO: check b for range
+                self.push(Word( ((a as u32) >> (b as u32)) & Word::INT_MASK ))?;
+            },
         }
 
         return Ok(());
@@ -2468,6 +2486,15 @@ impl<'tf> ToyForth<'tf> {
         let v = self.pop_kind().ok_or(ForthError::StackUnderflow)?;
         if let WordKind::Int(x) = v {
             Ok(x)
+        } else {
+            Err(ForthError::InvalidArgument)
+        }
+    }
+
+    fn pop_uint(&mut self) -> Result<u32, ForthError> {
+        let v = self.pop_kind().ok_or(ForthError::StackUnderflow)?;
+        if let WordKind::Int(x) = v {
+            Ok(x as u32)
         } else {
             Err(ForthError::InvalidArgument)
         }
@@ -4139,6 +4166,71 @@ FOO @
         assert_eq!(forth.pop_int().unwrap(),  0); // -5  0 10 WITHIN \\ outside of range
         assert_eq!(forth.pop_int().unwrap(),  0); // 15  0 10 WITHIN \\ outside of range
         assert_eq!(forth.pop_int().unwrap(), -1); //  5  0 10 WITHIN \\ easy one, all positive
+    }
+
+    #[test]
+    fn logical_shifts() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+HEX
+0        CONSTANT 0S
+0 INVERT CONSTANT 1S
+1S 1 RSHIFT INVERT CONSTANT MSB
+
+   1 0 RSHIFT \\ 1
+   1 1 RSHIFT \\ 0
+   2 1 RSHIFT \\ 1
+   4 2 RSHIFT \\ 1
+8000 F RSHIFT \\ 1
+MSB  1 RSHIFT MSB AND \\ 0
+
+   1 0 LSHIFT \\ 1
+   1 1 LSHIFT \\ 2
+   1 2 LSHIFT \\ 4
+   1 F LSHIFT \\ 8000
+ MSB 1 LSHIFT \\ 0
+
+  1 2* \\ 2
+  2 2* \\ 4
+  4 2* \\ 8
+ -1 2* \\ -2
+MSB 2* \\ 0
+
+  1 2/ \\ 0
+  2 2/ \\ 1
+  4 2/ \\ 2
+ -1 2/ MSB AND \\ 0
+MSB 2/ MSB AND \\ 0
+ -2 2/ INVERT MSB = \\ <true>
+").unwrap();
+
+
+        assert_eq!(forth.pop_int().unwrap(),  -1);//  -2 2/ INVERT MSB = \\ <true>
+        assert_eq!(forth.pop_uint().unwrap(),  0); // MSB 2/ MSB AND \\ 0
+        assert_eq!(forth.pop_uint().unwrap(),  0); //  -1 2/ MSB AND \\ 0
+        assert_eq!(forth.pop_uint().unwrap(),  2); //   4 2/ \\ 2
+        assert_eq!(forth.pop_uint().unwrap(),  1); //   2 2/ \\ 1
+        assert_eq!(forth.pop_uint().unwrap(),  0); //   1 2/ \\ 0
+
+        assert_eq!(forth.pop_uint().unwrap(),  0); // MSB 2* \\ 0
+        assert_eq!(forth.pop_int().unwrap(),  -2); //  -1 2* \\ -2
+        assert_eq!(forth.pop_uint().unwrap(),  8); //   4 2* \\ 8
+        assert_eq!(forth.pop_uint().unwrap(),  4); //   2 2* \\ 4
+        assert_eq!(forth.pop_uint().unwrap(),  2); //   1 2* \\ 2
+
+        assert_eq!(forth.pop_uint().unwrap(), 0);       //  MSB 1 LSHIFT \\ 0
+        assert_eq!(forth.pop_uint().unwrap(), 0x8000);  //    1 F LSHIFT \\ 8000
+        assert_eq!(forth.pop_uint().unwrap(), 4);       //    1 2 LSHIFT \\ 4
+        assert_eq!(forth.pop_uint().unwrap(), 2);       //    1 1 LSHIFT \\ 2
+        assert_eq!(forth.pop_uint().unwrap(), 1);       //    1 0 LSHIFT \\ 1
+
+        assert_eq!(forth.pop_uint().unwrap(), 0);       // MSB  1 RSHIFT MSB AND \\ 0
+        assert_eq!(forth.pop_uint().unwrap(), 1);       // 8000 F RSHIFT \\ 1
+        assert_eq!(forth.pop_uint().unwrap(), 1);       //    4 2 RSHIFT \\ 1
+        assert_eq!(forth.pop_uint().unwrap(), 1);       //    2 1 RSHIFT \\ 1
+        assert_eq!(forth.pop_uint().unwrap(), 0);       //    1 1 RSHIFT \\ 0
+        assert_eq!(forth.pop_uint().unwrap(), 1);       //    1 0 RSHIFT \\ 1
     }
 }
 
