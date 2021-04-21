@@ -202,6 +202,10 @@ impl Word {
         Word(0)
     }
 
+    fn bool(b: bool) -> Word {
+        if b { Word::true_value() } else { Word::false_value() }
+    }
+
     fn int(x: i32) -> Word {
         // TODO: range check
         Word((x as u32) & Word::INT_MASK)
@@ -345,6 +349,9 @@ enum BinOp {
     Less,
     Equal,
     NotEqual,
+
+    UnsignedGreater,
+    UnsignedLess,
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -531,6 +538,9 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("<", Instr::BinaryOp(BinOp::Less));
         tf.add_prim("=", Instr::BinaryOp(BinOp::Equal));
         tf.add_prim("<>", Instr::BinaryOp(BinOp::NotEqual));
+
+        tf.add_prim("U>", Instr::BinaryOp(BinOp::UnsignedGreater));
+        tf.add_prim("U<", Instr::BinaryOp(BinOp::UnsignedLess));
 
         let (emit,_) = tf.add_func("EMIT", ToyForth::builtin_emit);
 
@@ -1512,10 +1522,13 @@ impl<'tf> ToyForth<'tf> {
             BinOp::Or       => { self.push(Word::int(((a as u32) | (b as u32)) as i32))?; },
             BinOp::Xor      => { self.push(Word::int(((a as u32) ^ (b as u32)) as i32))?; },
 
-            BinOp::Greater  => { self.push(if a > b  { Word::true_value() } else { Word::false_value() })?; },
-            BinOp::Less     => { self.push(if a < b  { Word::true_value() } else { Word::false_value() })?; },
-            BinOp::Equal    => { self.push(if a == b { Word::true_value() } else { Word::false_value() })?; },
-            BinOp::NotEqual => { self.push(if a != b { Word::true_value() } else { Word::false_value() })?; },
+            BinOp::Greater  => { self.push(Word::bool(a > b ))?; },
+            BinOp::Less     => { self.push(Word::bool(a < b ))?; },
+            BinOp::Equal    => { self.push(Word::bool(a == b))?; },
+            BinOp::NotEqual => { self.push(Word::bool(a != b))?; },
+
+            BinOp::UnsignedGreater => { self.push(Word::bool( (a as u32) > (b as u32) ))?; },
+            BinOp::UnsignedLess    => { self.push(Word::bool( (a as u32) < (b as u32) ))?; },
         }
 
         return Ok(());
@@ -3990,6 +4003,39 @@ FOO @
 
         assert_eq!(forth.pop_int().unwrap(),  3);  //  3  2 MAX
         assert_eq!(forth.pop_int().unwrap(),  2);  //  3  2 MIN
+    }
+
+    #[test]
+    fn unsigned_comparisons() {
+        let mut forth = ToyForth::new();
+        forth.interpret("\
+  5  10 U<     5  10 U>
+ 10   5 U<    10   5 U>
+ -5  10 U<    -5  10 U>
+ -1  -5 U<    -1  -5 U>
+  0   0 U<     0   0 U>
+ -1  -1 U<    -1  -1 U>
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 12);
+
+        assert_eq!(forth.pop_int().unwrap(), 0); //   -1    -1 U>
+        assert_eq!(forth.pop_int().unwrap(), 0); //   -1    -1 U<
+
+        assert_eq!(forth.pop_int().unwrap(), 0); //    0     0 U>
+        assert_eq!(forth.pop_int().unwrap(), 0); //    0     0 U<
+
+        assert_eq!(forth.pop_int().unwrap(),-1); //   -1    -5 U>
+        assert_eq!(forth.pop_int().unwrap(), 0); //   -1    -5 U<
+
+        assert_eq!(forth.pop_int().unwrap(),-1); //   -5    10 U>
+        assert_eq!(forth.pop_int().unwrap(), 0); //   -5    10 U<
+
+        assert_eq!(forth.pop_int().unwrap(),-1); //   10     5 U>
+        assert_eq!(forth.pop_int().unwrap(), 0); //   10     5 U<
+
+        assert_eq!(forth.pop_int().unwrap(), 0); //    5    10 U>
+        assert_eq!(forth.pop_int().unwrap(),-1); //    5    10 U<
     }
 }
 
