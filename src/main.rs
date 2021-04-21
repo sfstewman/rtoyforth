@@ -304,6 +304,7 @@ enum Instr {
     Bye,
     Push(Word),
     Drop,
+    Pick,
     Dup,
     Swap,
     Over,
@@ -525,6 +526,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("DROP", Instr::Drop);
         tf.add_prim("SWAP", Instr::Swap);
         tf.add_prim("OVER", Instr::Over);
+        tf.add_prim("PICK", Instr::Pick);
 
         tf.add_prim("EXECUTE", Instr::Execute);
 
@@ -1420,6 +1422,17 @@ impl<'tf> ToyForth<'tf> {
         } else {
             Err(ForthError::StackUnderflow)
         }
+    }
+
+    fn pick(&mut self, dist: u32) -> Result<(), ForthError> {
+        let len = self.dstack.len();
+        if dist as usize >= len {
+            return Err(ForthError::StackUnderflow);
+        }
+
+        let val = self.dstack[len-1-(dist as usize)];
+        self.dstack.push(val);
+        Ok(())
     }
 
     fn dup(&mut self) -> Result<(), ForthError> {
@@ -2567,6 +2580,11 @@ impl<'tf> ToyForth<'tf> {
                 },
                 Instr::Drop => {
                     self.drop()?;
+                    pc += 1;
+                },
+                Instr::Pick => {
+                    let u = self.pop_uint()?;
+                    self.pick(u)?;
                     pc += 1;
                 },
                 Instr::Dup => {
@@ -4282,6 +4300,25 @@ MSB 2/ MSB AND \\ 0
 
         forth.interpret("2 3 DEPTH").unwrap();
         assert_eq!(forth.pop_int().unwrap(), 3);
+    }
+
+    #[test]
+    fn pick() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("1 2 3"); // load stack
+
+        forth.interpret("0 PICK").unwrap();  // 0 PICK == DUP
+        assert_eq!(forth.stack_depth(), 4);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+
+        forth.interpret("1 PICK").unwrap();  // 1 PICK == OVER
+        assert_eq!(forth.stack_depth(), 4);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+
+        forth.interpret("2 PICK").unwrap();
+        assert_eq!(forth.stack_depth(), 4);
+        assert_eq!(forth.pop_int().unwrap(), 1);
     }
 }
 
