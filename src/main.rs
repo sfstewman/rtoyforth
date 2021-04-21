@@ -641,6 +641,9 @@ impl<'tf> ToyForth<'tf> {
 : 1- 1 - ;
 : 1+ 1 + ;
 
+0    CONSTANT FALSE
+0 0= CONSTANT TRUE
+
 : DECIMAL 10 BASE ! ;
 : HEX     16 BASE ! ;
 
@@ -652,6 +655,14 @@ impl<'tf> ToyForth<'tf> {
 : TUCK SWAP OVER ;
 
 : PARSE-NAME BL PARSE ;
+
+: SPACE BL EMIT ;
+: SPACES DUP 0> IF 1 DO SPACE LOOP THEN ; 
+
+: 2DUP ( n1 n2 -- n1 n2 n1 n2 ) OVER OVER ;
+
+: MIN ( n1 n1 -- n3 ) 2DUP > IF SWAP THEN DROP ;
+: MAX ( n1 n1 -- n3 ) 2DUP < IF SWAP THEN DROP ;
 
 ").unwrap();
 
@@ -3956,6 +3967,35 @@ FOO @
         assert_eq!(forth.pop_int().unwrap(), 11);
         assert_eq!(forth.pop_int().unwrap(), 163);
         assert_eq!(forth.pop_int().unwrap(), 15);
+    }
+
+    #[test]
+    fn min_max_are_correct() {
+        let mut forth = ToyForth::new();
+        forth.interpret("\
+ 3  2 MIN   3  2 MAX
+-9  5 MIN  -9  5 MAX
+ 9 -5 MIN   9 -5 MAX
+ 0  0 MIN   0  0 MAX
+ 1  0 MIN   1  0 MAX
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 10);
+
+        assert_eq!(forth.pop_int().unwrap(),  1);  //  1  0 MAX
+        assert_eq!(forth.pop_int().unwrap(),  0);  //  1  0 MIN
+
+        assert_eq!(forth.pop_int().unwrap(),  0);  //  0  0 MAX
+        assert_eq!(forth.pop_int().unwrap(),  0);  //  0  0 MIN
+
+        assert_eq!(forth.pop_int().unwrap(),  9);  //  9 -5 MAX
+        assert_eq!(forth.pop_int().unwrap(), -5);  //  9 -5 MIN
+
+        assert_eq!(forth.pop_int().unwrap(),  5);  // -9  5 MAX
+        assert_eq!(forth.pop_int().unwrap(), -9);  // -9  5 MIN
+
+        assert_eq!(forth.pop_int().unwrap(),  3);  //  3  2 MAX
+        assert_eq!(forth.pop_int().unwrap(),  2);  //  3  2 MIN
     }
 }
 
