@@ -22,6 +22,8 @@ impl XT {
 struct Addr(u32);
 
 impl Addr {
+    const BUILTIN : u32 = 0x1000_0000;
+
     const MAX : u32 = 0x1fff_ffff;
     const MIN : u32 = 0;
     const MASK : u32 = 0x1fff_ffff;
@@ -410,6 +412,7 @@ enum ForthError {
     InvalidArgument,
     DivisionByZero,
 
+    InvalidNumberBase,
     NumberOutOfRange,
 
     InvalidEmptyString,
@@ -468,9 +471,15 @@ impl LineReader for std::io::Stdin {
 
 impl<'tf> ToyForth<'tf> {
     const ADDR_STATE:      Addr = Addr(0);
-    const ADDR_SLASH_CDEF: Addr = Addr(1);
-    const ADDR_SLASH_CXT:  Addr = Addr(2);
-    const ADDR_SLASH_BRACKET:  Addr = Addr(3);
+    const ADDR_BASE:       Addr = Addr(1);
+    const ADDR_SLASH_CDEF: Addr = Addr(2);
+    const ADDR_SLASH_CXT:  Addr = Addr(3);
+    const ADDR_SLASH_BRACKET:  Addr = Addr(4);
+
+    // special variables
+    const ADDR_HERE   : Addr = Addr(Addr::BUILTIN | 0);
+    const ADDR_UNUSED : Addr = Addr(Addr::BUILTIN | 1);
+    const ADDR_IN     : Addr = Addr(Addr::BUILTIN | 2);
 
     pub fn new() -> ToyForth<'tf> {
         let mut tf = ToyForth{
@@ -603,11 +612,19 @@ impl<'tf> ToyForth<'tf> {
         // FIXME: instead of /CDEF and /CXT, we should store the nest-sys
         // on the return stack.
         //
-        let state_vars = vec![ "STATE", "/CDEF", "/CXT", "/BRACKET" ];
+        let state_vars = vec![ "STATE", "BASE", "/CDEF", "/CXT", "/BRACKET" ];
         for v in &state_vars {
             let addr = tf.new_var(Word(0)).unwrap();
             tf.add_prim(v, Instr::Push(addr.to_word()));
         }
+
+        tf.set_var_at(ToyForth::ADDR_BASE, Word::int(10)).unwrap();
+
+        // Add builtins
+        tf.add_prim(">IN",    Instr::Push(ToyForth::ADDR_IN.to_word()));
+
+        tf.add_func("HERE",   ToyForth::builtin_here);
+        tf.add_func("UNUSED", ToyForth::builtin_unused);
 
         // define standard words that are not primitives
         tf.add_word("CR", &[
@@ -623,6 +640,9 @@ impl<'tf> ToyForth<'tf> {
 : 0<> 0 <> ;
 : 1- 1 - ;
 : 1+ 1 + ;
+
+: DECIMAL 10 BASE ! ;
+: HEX     16 BASE ! ;
 
 : ABS DUP 0< IF NEGATE THEN ;
 
@@ -1407,13 +1427,19 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn get_var_at(&self, addr: Addr) -> Result<Word, ForthError> {
-        let ind = addr.0 as usize;
-
-        if ind >= self.vars.len() {
-            return Err(ForthError::InvalidAddress(addr));
+        if (addr.0 & Addr::BUILTIN) != 0 {
+            match addr {
+                ToyForth::ADDR_IN => { return Ok(Word::int(self.input_off as i32)) },
+                _ => { return Err(ForthError::InvalidAddress(addr)) }
+            }
+        } else {
+            let ind = addr.0 as usize;
+            if ind < self.vars.len() {
+                Ok(self.vars[ind])
+            } else {
+                Err(ForthError::InvalidAddress(addr))
+            }
         }
-
-        Ok(self.vars[ind])
     }
 
     fn set_var_at(&mut self, addr: Addr, value: Word) -> Result<(), ForthError> {
@@ -1550,7 +1576,14 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_to_number(&mut self) -> Result<(), ForthError> {
-        let base : u32 = 10; // FIXME!
+        let base_var = self.get_var_at(ToyForth::ADDR_BASE)?;
+        let base_signed = base_var.to_int().ok_or(ForthError::InvalidNumberBase)?;
+
+        if base_signed < 0 || base_signed > 36 {
+            return Err(ForthError::InvalidNumberBase);
+        }
+
+        let base : u32 = base_signed as u32; // 10; // FIXME!
 
         let arg_len = self.pop_int()?;
         // eprintln!("arg_len = {}",arg_len);
@@ -2336,6 +2369,22 @@ impl<'tf> ToyForth<'tf> {
 
         self.builtin_s_quote()?;
         self.add_instr(Instr::DoCol(type_xt));
+        Ok(())
+    }
+
+    pub fn builtin_here(&mut self) -> Result<(),ForthError> {
+        let here = self.vars.len();
+        // TODO: check for overflow!
+        self.push(Addr(here as u32).to_word())?;
+        Ok(())
+    }
+
+    pub fn builtin_unused(&mut self) -> Result<(),ForthError> {
+        let here = self.vars.len();
+        let unused = Word::INT_MAX - (here as i32);
+
+        // TODO: check for overflow!
+        self.push_int(unused)?;
         Ok(())
     }
 
@@ -3883,6 +3932,30 @@ FOO @
         assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.pop_int().unwrap(), 120);
+    }
+
+    #[test]
+    fn base_values() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("2 BASE ! 101 110 10000").unwrap();
+        assert_eq!(forth.stack_depth(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 16);
+        assert_eq!(forth.pop_int().unwrap(), 6);
+        assert_eq!(forth.pop_int().unwrap(), 5);
+
+        forth.interpret("DECIMAL 123 321").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 321);
+        assert_eq!(forth.pop_int().unwrap(), 123);
+
+        forth.interpret("HEX F A3 0B 7F 123").unwrap();
+        assert_eq!(forth.stack_depth(), 5);
+        assert_eq!(forth.pop_int().unwrap(), 256 + 32 + 3);
+        assert_eq!(forth.pop_int().unwrap(), 127);
+        assert_eq!(forth.pop_int().unwrap(), 11);
+        assert_eq!(forth.pop_int().unwrap(), 163);
+        assert_eq!(forth.pop_int().unwrap(), 15);
     }
 }
 
