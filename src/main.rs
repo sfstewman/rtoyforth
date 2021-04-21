@@ -722,7 +722,7 @@ impl<'tf> ToyForth<'tf> {
 
     fn cpop_while_entry(&mut self) -> Result<(XT,XT), ForthError> {
         let ctl = self.cpop_entry()?;
-        if let ControlEntry::WhileAddr{head:head, cond:cond} = ctl {
+        if let ControlEntry::WhileAddr{head, cond} = ctl {
             Ok((head,cond))
         } else {
             Err(ForthError::InvalidControlEntry(ctl))
