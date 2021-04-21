@@ -690,6 +690,13 @@ impl<'tf> ToyForth<'tf> {
 : 2* 1 LSHIFT ;
 : 2/ 1 RSHIFT ;
 
+: MOD ( num div -- rem )
+    2DUP    ( num div         -- num div num div )
+    /       ( num div num div -- num div quot )
+    *       ( num div quot    -- num prod )
+    -       ( num prod        -- rem )
+;
+
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
@@ -4231,6 +4238,28 @@ MSB 2/ MSB AND \\ 0
         assert_eq!(forth.pop_uint().unwrap(), 1);       //    2 1 RSHIFT \\ 1
         assert_eq!(forth.pop_uint().unwrap(), 0);       //    1 1 RSHIFT \\ 0
         assert_eq!(forth.pop_uint().unwrap(), 1);       //    1 0 RSHIFT \\ 1
+    }
+
+    #[test]
+    fn mod_produces_remainder() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+ 5 2 MOD \\  1
+-5 2 MOD \\ -1
+10 3 MOD \\  1
+10 1 MOD \\  0
+11 3 MOD \\  2
+12 3 MOD \\  0").unwrap();
+
+        assert_eq!(forth.stack_depth(), 6);
+
+        assert_eq!(forth.pop_int().unwrap(),  0); // 12 3 MOD \\  0
+        assert_eq!(forth.pop_int().unwrap(),  2); // 11 3 MOD \\  2
+        assert_eq!(forth.pop_int().unwrap(),  0); // 10 1 MOD \\  0
+        assert_eq!(forth.pop_int().unwrap(),  1); // 10 3 MOD \\  1
+        assert_eq!(forth.pop_int().unwrap(), -1); // -5 2 MOD \\ -1
+        assert_eq!(forth.pop_int().unwrap(),  1); //  5 2 MOD \\  1
     }
 }
 
