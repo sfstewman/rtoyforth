@@ -318,6 +318,8 @@ enum Instr {
     ControlIndexDrop(u8),
     ControlIteration,
     ControlIndexPeek(u32),
+    Jump(XT),
+    Error(u32),
     ReturnPush,
     ReturnPop,
     ReturnCopy,
@@ -384,8 +386,9 @@ struct DictEntry {
 }
 
 impl DictEntry {
-    const PRIMITIVE : u32 = 0x0000_0001;
-    const IMMEDIATE : u32 = 0x0000_0002;
+    const PRIMITIVE : u32 = 1<<0; // 0x0000_0001
+    const IMMEDIATE : u32 = 1<<1; // 0x0000_0002
+    const DEFERRED  : u32 = 1<<3; // 0x0000_0008
 
     fn check_flag(&self, flag: u32) -> bool {
         (self.flags & flag) == flag
@@ -397,6 +400,10 @@ impl DictEntry {
 
     pub fn is_immediate(&self) -> bool {
         self.check_flag(DictEntry::IMMEDIATE)
+    }
+
+    pub fn is_deferred(&self) -> bool {
+        self.check_flag(DictEntry::DEFERRED)
     }
 }
 
@@ -412,6 +419,7 @@ struct ToyForth<'tf> {
     code: Vec<Instr>,
 
     add_instr_func: u32,
+    invalid_deferred_xt: XT,
 
     pad:  [u8;256],
     word: [u8;256],
@@ -453,6 +461,9 @@ enum ForthError {
     UnfinishedColonDefinition,
     DictEmpty,
 
+    DeferNotSet,
+    NotDeferredFunction,
+
     NoMatchingLoopHead,
 
     NotImplemented,
@@ -473,6 +484,141 @@ enum ForthError {
     InvalidFunction(u32),
 
     IOError(std::io::Error),
+}
+
+impl ForthError {
+    const STACK_UNDERFLOW                   : u32 = 101;
+    const CONTROL_STACK_UNDERFLOW           : u32 = 102;
+    const RETURN_STACK_UNDERFLOW            : u32 = 103;
+    const INVALID_OPERATION                 : u32 = 104;
+    const INVALID_ARGUMENT                  : u32 = 105;
+    const DIVISION_BY_ZERO                  : u32 = 106;
+    const INVALID_NUMBER_BASE               : u32 = 107;
+    const NUMBER_OUT_OF_RANGE               : u32 = 108;
+    const INVALID_EMPTY_STRING              : u32 = 119;
+    const STRING_TOO_LONG                   : u32 = 110;
+    const STRING_OFFSET_TOO_LARGE           : u32 = 111;
+    const STRING_NOT_FOUND                  : u32 = 112;
+    const FUNCTION_SPACE_OVERFLOW           : u32 = 113;
+    const DICT_SPACE_OVERFLOW               : u32 = 114;
+    const VAR_SPACE_OVERFLOW                : u32 = 115;
+    const STRING_SPACE_OVERFLOW             : u32 = 116;
+    const WORD_INVALID_WHILE_COMPILING      : u32 = 117;
+    const WORD_INVALID_WHILE_INTERPRETING   : u32 = 118;
+    const DEFINING_WORD_INVALID             : u32 = 129;
+    const UNFINISHED_COLON_DEFINITION       : u32 = 120;
+    const DICT_EMPTY                        : u32 = 121;
+    const DEFER_NOT_SET                     : u32 = 122;
+    const NOT_DEFERRED_FUNCTION             : u32 = 123;
+    const NO_MATCHING_LOOPHEAD              : u32 = 124;
+    const NOT_IMPLEMENTED                   : u32 = 125;
+    const WORD_NOT_FOUND                    : u32 = 126;
+    const INVALID_CELL                      : u32 = 127;
+    const INVALID_CONTROL_ENTRY             : u32 = 128;
+    const INVALID_INDEX                     : u32 = 129;
+    const INVALID_CONTROL_INSTRUCTION       : u32 = 130;
+    const INVALID_EXECUTION_TOKEN           : u32 = 131;
+    const INVALID_STRING                    : u32 = 132;
+    const INVALID_CHAR                      : u32 = 133;
+    const INVALID_ADDRESS                   : u32 = 134;
+    const INVALID_COUNTED_STRING            : u32 = 135;
+    const INVALID_STRING_VALUE              : u32 = 136;
+    const INVALID_DELIMITER                 : u32 = 137;
+    const INVALID_FUNCTION                  : u32 = 138;
+    const IO_ERROR                          : u32 = 139;
+
+    fn from_code(code: u32) -> ForthError {
+        match code {
+            ForthError::STACK_UNDERFLOW                 => ForthError::StackUnderflow,
+            ForthError::CONTROL_STACK_UNDERFLOW         => ForthError::ControlStackUnderflow,
+            ForthError::RETURN_STACK_UNDERFLOW          => ForthError::ReturnStackUnderflow,
+
+            ForthError::INVALID_OPERATION               => ForthError::InvalidOperation,
+            ForthError::INVALID_ARGUMENT                => ForthError::InvalidArgument,
+            ForthError::DIVISION_BY_ZERO                => ForthError::DivisionByZero,
+
+            ForthError::INVALID_NUMBER_BASE             => ForthError::InvalidNumberBase,
+            ForthError::NUMBER_OUT_OF_RANGE             => ForthError::NumberOutOfRange,
+
+            ForthError::INVALID_EMPTY_STRING            => ForthError::InvalidEmptyString,
+            ForthError::STRING_TOO_LONG                 => ForthError::StringTooLong,
+            ForthError::STRING_OFFSET_TOO_LARGE         => ForthError::StringOffsetTooLarge,
+            ForthError::STRING_NOT_FOUND                => ForthError::StringNotFound,
+
+            ForthError::FUNCTION_SPACE_OVERFLOW         => ForthError::FunctionSpaceOverflow,
+            ForthError::DICT_SPACE_OVERFLOW             => ForthError::DictSpaceOverflow,
+            ForthError::VAR_SPACE_OVERFLOW              => ForthError::VarSpaceOverflow,
+            ForthError::STRING_SPACE_OVERFLOW           => ForthError::StringSpaceOverflow,
+
+            ForthError::WORD_INVALID_WHILE_COMPILING    => ForthError::WordInvalidWhileCompiling,
+            ForthError::WORD_INVALID_WHILE_INTERPRETING => ForthError::WordInvalidWhileInterpreting,
+            ForthError::DEFINING_WORD_INVALID           => ForthError::DefiningWordInvalid,
+            ForthError::UNFINISHED_COLON_DEFINITION     => ForthError::UnfinishedColonDefinition,
+            ForthError::DICT_EMPTY                      => ForthError::DictEmpty,
+
+            ForthError::DEFER_NOT_SET                   => ForthError::DeferNotSet,
+            ForthError::NOT_DEFERRED_FUNCTION           => ForthError::NotDeferredFunction,
+
+            ForthError::NO_MATCHING_LOOPHEAD            => ForthError::NoMatchingLoopHead,
+
+            ForthError::NOT_IMPLEMENTED                 => ForthError::NotImplemented,
+
+            // FIXME: this isn't great...
+            _ => { panic!("cannot convert code to error"); }
+        }
+    }
+
+    fn code(&self) -> u32 {
+        match self {
+            ForthError::StackUnderflow                  => ForthError::STACK_UNDERFLOW,
+            ForthError::ControlStackUnderflow           => ForthError::CONTROL_STACK_UNDERFLOW,
+            ForthError::ReturnStackUnderflow            => ForthError::RETURN_STACK_UNDERFLOW,
+
+            ForthError::InvalidOperation                => ForthError::INVALID_OPERATION,
+            ForthError::InvalidArgument                 => ForthError::INVALID_ARGUMENT,
+            ForthError::DivisionByZero		            => ForthError::DIVISION_BY_ZERO,
+
+            ForthError::InvalidNumberBase	            => ForthError::INVALID_NUMBER_BASE,
+            ForthError::NumberOutOfRange	            => ForthError::NUMBER_OUT_OF_RANGE,
+
+            ForthError::InvalidEmptyString	            => ForthError::INVALID_EMPTY_STRING,
+            ForthError::StringTooLong		            => ForthError::STRING_TOO_LONG,
+            ForthError::StringOffsetTooLarge            => ForthError::STRING_OFFSET_TOO_LARGE,
+            ForthError::StringNotFound		            => ForthError::STRING_NOT_FOUND,
+
+            ForthError::FunctionSpaceOverflow	        => ForthError::FUNCTION_SPACE_OVERFLOW,
+            ForthError::DictSpaceOverflow		        => ForthError::DICT_SPACE_OVERFLOW,
+            ForthError::VarSpaceOverflow		        => ForthError::VAR_SPACE_OVERFLOW,
+            ForthError::StringSpaceOverflow		        => ForthError::STRING_SPACE_OVERFLOW,
+
+            ForthError::WordInvalidWhileCompiling		=> ForthError::WORD_INVALID_WHILE_COMPILING,
+            ForthError::WordInvalidWhileInterpreting	=> ForthError::WORD_INVALID_WHILE_INTERPRETING,
+            ForthError::DefiningWordInvalid			    => ForthError::DEFINING_WORD_INVALID,
+            ForthError::UnfinishedColonDefinition		=> ForthError::UNFINISHED_COLON_DEFINITION,
+            ForthError::DictEmpty			            => ForthError::DICT_EMPTY,
+
+            ForthError::DeferNotSet			            => ForthError::DEFER_NOT_SET,
+            ForthError::NotDeferredFunction             => ForthError::NOT_DEFERRED_FUNCTION,
+
+            ForthError::NoMatchingLoopHead			    => ForthError::NO_MATCHING_LOOPHEAD,
+
+            ForthError::NotImplemented                  => ForthError::NOT_IMPLEMENTED,
+            ForthError::WordNotFound(_)			        => ForthError::WORD_NOT_FOUND,
+            ForthError::InvalidCell(_)			        => ForthError::INVALID_CELL,
+            ForthError::InvalidControlEntry(_)			=> ForthError::INVALID_CONTROL_ENTRY,
+            ForthError::InvalidIndex(_)			        => ForthError::INVALID_INDEX,
+            ForthError::InvalidControlInstruction(_)	=> ForthError::INVALID_CONTROL_INSTRUCTION,
+            ForthError::InvalidExecutionToken(_)		=> ForthError::INVALID_EXECUTION_TOKEN,
+            ForthError::InvalidString(_)				=> ForthError::INVALID_STRING,
+            ForthError::InvalidChar(_)			        => ForthError::INVALID_CHAR,
+            ForthError::InvalidAddress(_)				=> ForthError::INVALID_ADDRESS,
+            ForthError::InvalidCountedString(_)			=> ForthError::INVALID_COUNTED_STRING,
+            ForthError::InvalidStringValue(_)			=> ForthError::INVALID_STRING_VALUE,
+            ForthError::InvalidDelimiter(_)				=> ForthError::INVALID_DELIMITER,
+            ForthError::InvalidFunction(_)				=> ForthError::INVALID_FUNCTION,
+            ForthError::IOError(_)			            => ForthError::IO_ERROR,
+        }
+    }
 }
 
 impl std::convert::From<std::io::Error> for ForthError {
@@ -516,6 +662,7 @@ impl<'tf> ToyForth<'tf> {
             code:    std::vec::Vec::new(),
 
             add_instr_func: u32::MAX,
+            invalid_deferred_xt: XT(0),
 
             pad:     [0;256],
             word:    [0;256],
@@ -529,6 +676,9 @@ impl<'tf> ToyForth<'tf> {
 
         // First word in dict (addr 0) always holds BYE
         tf.add_instr(Instr::Bye);
+
+        tf.invalid_deferred_xt = tf.mark_code();
+        tf.add_instr(Instr::Error(ForthError::DEFER_NOT_SET));
 
         // set up standard dictionary
         tf.add_prim("BYE", Instr::Bye);
@@ -640,6 +790,10 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func("'", ToyForth::builtin_tick);
         tf.add_immed("[']", ToyForth::builtin_brak_tick);
+
+        tf.add_func("DEFER", ToyForth::builtin_defer);
+        tf.add_func("DEFER!", ToyForth::builtin_defer_bang);
+        tf.add_func("DEFER@", ToyForth::builtin_defer_at);
 
         // debugging
         tf.add_func("/STACKS", ToyForth::builtin_at_stacks);
@@ -1536,6 +1690,66 @@ impl<'tf> ToyForth<'tf> {
     fn ret_copy_to_data(&mut self) -> Result<(), ForthError> {
         let w = self.rstack.last().ok_or(ForthError::StackUnderflow)?;
         self.dstack.push(*w);
+        Ok(())
+    }
+
+    fn builtin_defer(&mut self) -> Result<(), ForthError> {
+        let defer_xt = self.mark_code();
+        self.add_instr(Instr::Jump(self.invalid_deferred_xt));
+        self.add_instr(Instr::Unnest);
+
+        let st = self.next_word(' ' as u8, u8::MAX as usize)?;
+        // FIXME: completely unnecessary copy here...
+        let s = self.maybe_string_at(st)?.to_string();
+
+        let st = self.add_string(&s)?;
+        self.dict.push(DictEntry{
+            st: st,
+            xt: defer_xt,
+            flags: DictEntry::DEFERRED,
+        });
+
+        Ok(())
+    }
+
+    fn builtin_defer_bang(&mut self) -> Result<(), ForthError> {
+        let deferred_xt = self.pop_xt()?;
+        let xt = self.pop_xt()?;
+
+        let code_ind = deferred_xt.0 as usize;
+        if code_ind >= self.code.len() {
+            return Err(ForthError::FunctionSpaceOverflow);
+        }
+
+        match self.code[code_ind] {
+            Instr::Jump(_) => {
+                self.code[code_ind] = Instr::Jump(xt);
+            },
+            _ => {
+                return Err(ForthError::NotDeferredFunction);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn builtin_defer_at(&mut self) -> Result<(), ForthError> {
+        let deferred_xt = self.pop_xt()?;
+
+        let code_ind = deferred_xt.0 as usize;
+        if code_ind >= self.code.len() {
+            return Err(ForthError::FunctionSpaceOverflow);
+        }
+
+        match self.code[code_ind] {
+            Instr::Jump(xt) => {
+                self.push(xt.to_word())?;
+            },
+            _ => {
+                return Err(ForthError::NotDeferredFunction);
+            }
+        }
+
         Ok(())
     }
 
@@ -2716,6 +2930,12 @@ impl<'tf> ToyForth<'tf> {
                 Instr::Over => {
                     self.over()?;
                     pc += 1;
+                },
+                Instr::Jump(xt) => {
+                    pc = xt.0;
+                },
+                Instr::Error(code) => {
+                    return Err(ForthError::from_code(code));
                 },
                 Instr::Branch(delta) => {
                     if delta == 0 {
@@ -4542,6 +4762,24 @@ GT7
 
         forth.print_word_code("GT6");
         forth.print_word_code("GT7");
+    }
+
+    #[test]
+    fn defer_and_related() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+DEFER defer3
+' * ' defer3 DEFER!
+2 3 defer3
+' defer3 DEFER@
+").unwrap();
+
+        let star_xt = forth.lookup_word("*").unwrap();
+
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_xt().unwrap(), star_xt);
+        assert_eq!(forth.pop_int().unwrap(), 6);
     }
 }
 
