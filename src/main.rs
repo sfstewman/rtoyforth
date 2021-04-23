@@ -707,6 +707,20 @@ impl<'tf> ToyForth<'tf> {
 \\ Should this be a builtin?
 : ?DUP DUP 0<> IF DUP THEN ;
 
+: COUNT-DIGITS 1 >R BEGIN 10 / DUP 0<> WHILE R> 1+ >R REPEAT DROP R> ;
+
+\\ This isn't quite right.  It leaves a trailing space.
+: .R ( n1 n2 -- )
+    OVER COUNT-DIGITS ( n1 n2 digs1 )
+    - DUP       ( n1 n2 digs2 -- n1 n2-digs1 n2-digs1 )
+    0> IF       ( n1 n2-digs1 n2-digs1 -- n1 n2-digs1 )
+        SPACES  ( n1 n2-digs1 -- n1 )
+    ELSE
+        DROP    ( n1 n2-digs1 -- n1 )
+    THEN
+    .           ( n1 -- )
+;
+
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
