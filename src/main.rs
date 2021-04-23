@@ -387,12 +387,16 @@ impl DictEntry {
     const PRIMITIVE : u32 = 0x0000_0001;
     const IMMEDIATE : u32 = 0x0000_0002;
 
+    fn check_flag(&self, flag: u32) -> bool {
+        (self.flags & flag) == flag
+    }
+
     pub fn is_primitive(&self) -> bool {
-        (self.flags & DictEntry::PRIMITIVE) != 0
+        self.check_flag(DictEntry::PRIMITIVE)
     }
 
     pub fn is_immediate(&self) -> bool {
-        (self.flags & DictEntry::IMMEDIATE) != 0
+        self.check_flag(DictEntry::IMMEDIATE)
     }
 }
 
@@ -406,6 +410,8 @@ struct ToyForth<'tf> {
     vars: Vec<Word>,
     strings: std::vec::Vec<u8>,
     code: Vec<Instr>,
+
+    add_instr_func: u32,
 
     pad:  [u8;256],
     word: [u8;256],
@@ -509,6 +515,8 @@ impl<'tf> ToyForth<'tf> {
             strings: std::vec::Vec::new(),
             code:    std::vec::Vec::new(),
 
+            add_instr_func: u32::MAX,
+
             pad:     [0;256],
             word:    [0;256],
 
@@ -559,6 +567,8 @@ impl<'tf> ToyForth<'tf> {
 
         let (emit,_) = tf.add_func("EMIT", ToyForth::builtin_emit);
 
+        tf.add_instr_func = tf.add_anon_func(ToyForth::builtin_add_instr).unwrap() as u32;
+
         // words that may be replaced with Forth definitions at some point
         tf.add_prim("BL", Instr::Push(Word::int(' ' as i32)));
         tf.add_func("CHAR", ToyForth::builtin_char);
@@ -569,7 +579,9 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func(".", ToyForth::builtin_dot);
         tf.add_func(":", ToyForth::builtin_colon);
+        tf.add_func(":NONAME", ToyForth::builtin_colon_noname);
         tf.add_immed(";", ToyForth::builtin_semi);
+        tf.add_immed("POSTPONE", ToyForth::builtin_postpone);
 
         tf.add_immed("EXIT", ToyForth::builtin_exit);
 
@@ -914,6 +926,14 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    pub fn check_not_compiling(&self) -> Result<(), ForthError> {
+        if !self.compiling() {
+            Ok(())
+        } else {
+            Err(ForthError::WordInvalidWhileCompiling)
+        }
+    }
+
     pub fn check_interpreting(&self) -> Result<(), ForthError> {
         if !self.compiling() {
             Ok(())
@@ -1186,8 +1206,7 @@ impl<'tf> ToyForth<'tf> {
         return (ind,xt);
     }
 
-    pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<(usize,XT),ForthError> {
-        self.add_string(word)?;
+    pub fn add_anon_func(&mut self, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<usize,ForthError> {
         let func_ind = self.ufuncs.len();
 
         if func_ind > 0xffff_ffff {
@@ -1195,7 +1214,15 @@ impl<'tf> ToyForth<'tf> {
         }
 
         self.ufuncs.push(ForthFunc(func));
+        Ok(func_ind)
+    }
+
+    pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<(usize,XT),ForthError> {
+        self.add_string(word)?;
+
+        let func_ind = self.add_anon_func(func)?;
         let xt = self.add_primitive(word, Instr::Func(func_ind as u32))?;
+
         Ok((func_ind,xt))
     }
 
@@ -1811,6 +1838,32 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn builtin_add_instr(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        let xt = self.pop_xt()?;
+        self.add_instr(Instr::DoCol(xt));
+        Ok(())
+    }
+
+    fn builtin_postpone(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        let st = self.next_word(' ' as u8, u8::MAX as usize)?;
+
+        let s = self.maybe_string_at(st)?;
+        let ent = self.lookup_dict_entry(s)?;
+
+        if ent.is_immediate() {
+            self.add_instr(Instr::DoCol(ent.xt));
+        } else {
+            self.add_instr(Instr::Push(ent.xt.to_word()));
+            self.add_instr(Instr::Func(self.add_instr_func));
+        }
+
+        Ok(())
+    }
+
     fn builtin_brak_tick(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -1981,6 +2034,7 @@ impl<'tf> ToyForth<'tf> {
 
     fn builtin_colon(&mut self) -> Result<(), ForthError> {
         self.check_not_in_bracket()?;
+        // TODO: check not defining
 
         self.push_int(' ' as i32)?;
         self.builtin_parse()?;
@@ -2005,18 +2059,40 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn builtin_colon_noname(&mut self) -> Result<(), ForthError> {
+        self.check_not_in_bracket()?;
+        self.check_not_compiling()?;
+        // TODO: check not defining
+
+        // XXX: check that STATE==0, /CDEF and /CXT are not set
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0))?;
+
+        let xt = self.mark_code();
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT, xt.to_word())?;
+        self.set_var_at(ToyForth::ADDR_STATE, Word::int(1))?;
+
+        Ok(())
+    }
+
     fn builtin_semi(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
         self.add_instr(Instr::Unnest);
-        let st = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?.to_str().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
+
+        let cdef = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?;
         let xt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?.to_xt().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
 
-        self.dict.push(DictEntry{
-            st: st,
-            xt: xt,
-            flags: 0,
-        });
+        if cdef != Word(0) {
+            let st = cdef.to_str().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
+
+            self.dict.push(DictEntry{
+                st: st,
+                xt: xt,
+                flags: 0,
+            });
+        } else {
+            self.push(xt.to_word())?;
+        }
 
         self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0))?;
         self.set_var_at(ToyForth::ADDR_SLASH_CXT, Word(0))?;
@@ -4405,6 +4481,67 @@ MSB 2/ MSB AND \\ 0
         forth.interpret("0 ?DUP").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 0);
+    }
+
+    #[test]
+    fn colon_noname() {
+        let mut forth = ToyForth::new();
+
+        let next_xt = forth.mark_code();
+
+        forth.interpret(":NONAME 3 + ;").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_xt().unwrap(), next_xt);
+
+        forth.interpret(":NONAME 5 + ; 2 SWAP EXECUTE").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 7);
+    }
+
+    #[test]
+    fn postpone() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+: GT1 123 ;
+\\ { ' GT1 EXECUTE -> 123 }
+\\ { : GT2 ['] GT1 ; IMMEDIATE -> }
+\\ { GT2 EXECUTE -> 123 }
+\\ HERE 3 C, CHAR G C, CHAR T C, CHAR 1 C, CONSTANT GT1STRING
+\\ HERE 3 C, CHAR G C, CHAR T C, CHAR 2 C, CONSTANT GT2STRING
+\\ { GT1STRING FIND -> ' GT1 -1 }
+\\ { GT2STRING FIND -> ' GT2 1 }
+\\ ( HOW TO SEARCH FOR NON-EXISTENT WORD? )
+\\ { : GT3 GT2 LITERAL ; -> }
+\\ { GT3 -> ' GT1 }
+\\ { GT1STRING COUNT -> GT1STRING CHAR+ 3 }
+
+: GT4 POSTPONE GT1 ; IMMEDIATE
+: GT5 GT4 ;
+GT5
+").unwrap();
+
+        forth.print_word_code("GT1");
+        forth.print_word_code("GT4");
+        forth.print_word_code("GT5");
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 123);
+
+        forth.interpret("\
+: GT6 345 ; IMMEDIATE
+: GT7 POSTPONE GT6 ;
+GT7
+").unwrap();
+
+        forth.print_word_code("GT6");
+        forth.print_word_code("GT7");
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 345);
+
+        forth.print_word_code("GT6");
+        forth.print_word_code("GT7");
     }
 }
 
