@@ -1031,6 +1031,13 @@ impl<'tf> ToyForth<'tf> {
         for (i,instr) in self.code[xt.0 as usize..].iter().enumerate() {
             let istr = format!("{:?}", instr);
             match instr {
+                Instr::Push(w) => {
+                    if let WordKind::Int(n) = w.kind() {
+                        eprintln!("[{:3}] {:40}  | Push([int] {})", i, istr, n);
+                    } else {
+                        eprintln!("[{:3}] {:40}  | Push({})", i, istr, w);
+                    }
+                }
                 Instr::DoCol(xt) => {
                     let name = xt_map[&xt.0];
                     eprintln!("[{:3}] {:40}  | {}", i, istr, name);
@@ -1104,6 +1111,20 @@ impl<'tf> ToyForth<'tf> {
         self.out_stream = old_out;
 
         return ret;
+    }
+
+    pub fn stdout_interpret(&mut self, s: &str) -> Result<(), ForthError> {
+        let stdout = std::io::stdout();
+        let w = Rc::new(RefCell::new(stdout));
+
+        return self.capture_interpret(s, w);
+    }
+
+    pub fn stderr_interpret(&mut self, s: &str) -> Result<(), ForthError> {
+        let stderr = std::io::stderr();
+        let w = Rc::new(RefCell::new(stderr));
+
+        return self.capture_interpret(s, w);
     }
 
     pub fn interpret(&mut self, s: &str) -> Result<(), ForthError> {
