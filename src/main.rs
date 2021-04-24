@@ -175,7 +175,7 @@ impl ST {
     fn descr(self) -> std::string::String {
         let w = self.to_word();
         match self {
-            ST::Allocated(off) => {
+            ST::Allocated(_) => {
                 format!("[st {}] allocated[addr={}, len={}]", w.0, self.addr(), self.len())
             },
             ST::PadSpace(loc) => {
@@ -1289,17 +1289,6 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    fn refill(r: &mut dyn std::io::BufRead, s: &mut String) -> Result<(), ForthError> {
-        r.read_line(s)?;
-        if let Some(ch) = s.pop() {
-            if ch != '\n' {
-                s.push(ch);
-            }
-        }
-
-        Ok(())
-    }
-
     pub fn builtin_refill(&mut self) -> Result<(), ForthError> {
         self.last_input_off = 0;
         self.input_off = 0;
@@ -1317,7 +1306,6 @@ impl<'tf> ToyForth<'tf> {
 
         }
 
-        // return ToyForth::refill(rdr.deref_mut(), &mut self.input);
         Ok(())
     }
 
@@ -1869,7 +1857,7 @@ impl<'tf> ToyForth<'tf> {
             self.add_instr(Instr::Push(deferred_xt.to_word()));
             self.add_instr(Instr::DoCol(defer_at_xt));
         } else {
-            self.push(deferred_xt.to_word());
+            self.push(deferred_xt.to_word())?;
             self.builtin_defer_at()?;
         }
 
@@ -4798,7 +4786,7 @@ MSB 2/ MSB AND \\ 0
     fn pick() {
         let mut forth = ToyForth::new();
 
-        forth.interpret("1 2 3"); // load stack
+        forth.interpret("1 2 3").unwrap(); // load stack
 
         forth.interpret("0 PICK").unwrap();  // 0 PICK == DUP
         assert_eq!(forth.stack_depth(), 4);
