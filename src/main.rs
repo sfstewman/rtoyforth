@@ -385,14 +385,20 @@ enum BinOp {
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
+struct DoInfo {
+    head: XT,
+    qdo: Option<XT>,
+}
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum ControlEntry {
     IfAddr(XT),
     ElseAddr(XT),
 
-    DoAddr(XT),
+    DoAddr(DoInfo),
     BeginAddr(XT),
     WhileAddr{ head: XT, cond: XT },
-    LeaveAddr{ head: XT, leave: XT },
+    LeaveAddr{ head: DoInfo, leave: XT },
 
     Index(i32),
 }
@@ -777,6 +783,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("THEN", ToyForth::builtin_then);
 
         tf.add_immed("DO", ToyForth::builtin_do);
+        tf.add_immed("?DO", ToyForth::builtin_qdo);
         tf.add_immed("LOOP", ToyForth::builtin_loop);
         tf.add_immed("I", ToyForth::builtin_loop_ind0);
         tf.add_immed("J", ToyForth::builtin_loop_ind1);
@@ -947,8 +954,8 @@ impl<'tf> ToyForth<'tf> {
         self.cstack.push(ControlEntry::ElseAddr(xt));
     }
 
-    fn cpush_do_addr(&mut self, xt: XT) {
-        self.cstack.push(ControlEntry::DoAddr(xt));
+    fn cpush_do_addr(&mut self, xt: XT, qdo: Option<XT>) {
+        self.cstack.push(ControlEntry::DoAddr(DoInfo{ head:xt, qdo: qdo }));
     }
 
     fn cpush_begin_addr(&mut self, xt: XT) {
@@ -967,10 +974,10 @@ impl<'tf> ToyForth<'tf> {
         self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)
     }
 
-    fn cpop_loop_addr(&mut self) -> Result<XT, ForthError> {
+    fn cpop_loop_addr(&mut self) -> Result<DoInfo, ForthError> {
         let ctl = self.cpop_entry()?;
-        if let ControlEntry::DoAddr(xt) = ctl {
-            Ok(xt)
+        if let ControlEntry::DoAddr(info) = ctl {
+            Ok(info)
         } else {
             Err(ForthError::InvalidControlEntry(ctl))
         }
@@ -2652,7 +2659,7 @@ impl<'tf> ToyForth<'tf> {
         let (i,do_xt) = self.cstack.iter().copied().enumerate().rev().find_map(
             |(i,itm)| if let ControlEntry::DoAddr(xt) = itm { Some((i,xt)) } else { None }).ok_or(ForthError::NoMatchingLoopHead)?;
 
-        self.add_instr(Instr::ControlIndexDrop(2));
+        // self.add_instr(Instr::ControlIndexDrop(2));
         let leave_xt = self.add_instr(Instr::Branch(0));
         self.cstack[i] = ControlEntry::LeaveAddr{ head: do_xt, leave: leave_xt };
         Ok(())
@@ -2667,7 +2674,27 @@ impl<'tf> ToyForth<'tf> {
         ]);
 
         let xt = self.mark_code();
-        self.cpush_do_addr(xt);
+        self.cpush_do_addr(xt, None);
+        Ok(())
+    }
+
+    fn builtin_qdo(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        // loop header
+        self.add_code(&[
+            Instr::Over,
+            Instr::Over, // TODO: 2DUP
+            Instr::ControlIndexPush(2),
+            Instr::BinaryOp(BinOp::Minus),
+        ]);
+
+        let branch_xt = self.add_instr(Instr::BranchOnZero(0));
+
+        // mark loop
+        let xt = self.mark_code();
+        self.cpush_do_addr(xt, Some(branch_xt));
+
         Ok(())
     }
 
@@ -2679,12 +2706,18 @@ impl<'tf> ToyForth<'tf> {
 
         let entry = self.cpop_entry()?;
         match entry {
-            ControlEntry::DoAddr(xt) => {
-                do_xt = xt;
+            ControlEntry::DoAddr(info) => {
+                do_xt = info.head;
+                if let Some(qdo_xt) = info.qdo {
+                    leave_xts.push(qdo_xt);
+                }
             },
 
-            ControlEntry::LeaveAddr{head:xt, leave: leave_xt} => {
-                do_xt = xt;
+            ControlEntry::LeaveAddr{head:info, leave: leave_xt} => {
+                do_xt = info.head;
+                if let Some(qdo_xt) = info.qdo {
+                    leave_xts.push(qdo_xt);
+                }
                 leave_xts.push(leave_xt);
             },
 
@@ -2706,10 +2739,17 @@ impl<'tf> ToyForth<'tf> {
         }
 
         {
-            let after_xt = self.mark_code();
+            let after_xt = self.add_instr(Instr::ControlIndexDrop(2));
+
             for xt in leave_xts {
                 let delta = ((after_xt.0 as i64) - (xt.0 as i64)) as i32;
-                self.code[xt.0 as usize] = Instr::Branch(delta);
+                let new_instr = match self.code[xt.0 as usize] {
+                    Instr::Branch(_) => { Instr::Branch(delta) },
+                    Instr::BranchOnZero(_) => { Instr::BranchOnZero(delta) },
+                    _ => { panic!("invalid instruction in LOOP"); }
+                };
+
+                self.code[xt.0 as usize] = new_instr;
             }
         }
 
@@ -3319,19 +3359,14 @@ impl<'tf> ToyForth<'tf> {
                         return Err(ForthError::InvalidControlEntry(self.cstack[clen-2]));
                     };
 
-                    let ind = if let ControlEntry::Index(idx) = self.cstack[clen-1] {
-                        idx
+                    let next = if let ControlEntry::Index(idx) = self.cstack[clen-1] {
+                        idx+1
                     } else {
                         return Err(ForthError::InvalidControlEntry(self.cstack[clen-1]));
                     };
 
-                    if ind < top {
-                        self.cstack[clen-1] = ControlEntry::Index(ind+1);
-                        self.push_int(0)?;
-                    } else {
-                        self.cstack.truncate(clen-2);
-                        self.push_int(1)?;
-                    }
+                    self.cstack[clen-1] = ControlEntry::Index(next);
+                    self.push(Word::bool(next == top));
 
                     pc += 1;
                 },
@@ -4216,7 +4251,7 @@ mod tests {
     fn single_loop() {
         let mut forth = ToyForth::new();
 
-        forth.interpret(": foo 3 1 do dup . 5 + loop ;").unwrap();
+        forth.interpret(": foo 3 0 do dup . 5 + loop ;").unwrap();
 
         let foo_xt = forth.lookup_word("foo").unwrap();
         for (i,instr) in forth.code[foo_xt.0 as usize..].iter().enumerate() {
@@ -4242,8 +4277,8 @@ mod tests {
 
         forth.capture_interpret(
             ": foo \
-    3 1 do \
-        3 1 do \
+    3 0 do \
+        3 0 do \
             [CHAR] I EMIT \
             BL EMIT \
             J . \
@@ -4266,15 +4301,15 @@ mod tests {
         let s = std::str::from_utf8(outb).unwrap();
         eprintln!("output is\n{}", s);
         assert_eq!(s, "\
+I 0   J 0 
+I 0   J 1 
+I 0   J 2 
+I 1   J 0 
 I 1   J 1 
 I 1   J 2 
-I 1   J 3 
+I 2   J 0 
 I 2   J 1 
 I 2   J 2 
-I 2   J 3 
-I 3   J 1 
-I 3   J 2 
-I 3   J 3 
 ");
     }
 
@@ -4662,6 +4697,48 @@ BAR
         assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.pop_int().unwrap(), 128);
+    }
+
+    #[test]
+    fn qdo_loop() {
+        let mut forth = ToyForth::new();
+
+        let stdout = std::io::stdout();
+
+        forth.interpret("\
+VARIABLE iter
+: BAR
+    .\" Starting iteration\" CR
+    /STACKS
+    -1 iter !
+    5 SWAP 
+    ?DO
+        1+
+        I iter !
+        .\" Iteration\" I . .\" iter = \" iter @ . CR
+        /STACKS
+        \\ LEAVE
+    LOOP
+    .\" Done. iter = \" iter @ . CR
+    /STACKS
+;").unwrap();
+
+        forth.print_word_code("BAR");
+
+        forth.interpret("0 5 BAR iter @ /STACKS").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+        assert_eq!(forth.pop_int().unwrap(),  0);
+
+        forth.interpret("0 0 BAR iter @").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 4);
+        assert_eq!(forth.pop_int().unwrap(), 5);
+
+        forth.interpret("17 -3 BAR iter @").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 4);
+        assert_eq!(forth.pop_int().unwrap(), 25);
     }
 
     #[test]
