@@ -400,6 +400,9 @@ enum ControlEntry {
     WhileAddr{ head: XT, cond: XT },
     LeaveAddr{ head: DoInfo, leave: XT },
 
+    CaseEntry{ exit_xt: XT },
+    OfEntry{ exit_xt: XT, next_xt: XT },
+
     Index(i32),
 }
 
@@ -782,6 +785,11 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("ELSE", ToyForth::builtin_else);
         tf.add_immed("THEN", ToyForth::builtin_then);
 
+        tf.add_immed("CASE", ToyForth::builtin_case);
+        tf.add_immed("OF", ToyForth::builtin_of);
+        tf.add_immed("ENDOF", ToyForth::builtin_endof);
+        tf.add_immed("ENDCASE", ToyForth::builtin_endcase);
+
         tf.add_immed("DO", ToyForth::builtin_do);
         tf.add_immed("?DO", ToyForth::builtin_qdo);
         tf.add_immed("LOOP", ToyForth::builtin_loop);
@@ -972,6 +980,14 @@ impl<'tf> ToyForth<'tf> {
         self.cstack.push(ControlEntry::Index(idx));
     }
 
+    fn cpush_case(&mut self, exit_xt: XT) {
+        self.cstack.push(ControlEntry::CaseEntry{exit_xt:exit_xt});
+    }
+
+    fn cpush_case_of(&mut self, exit_xt: XT, next_xt: XT) {
+        self.cstack.push(ControlEntry::OfEntry{exit_xt:exit_xt, next_xt:next_xt});
+    }
+
     fn cpop_entry(&mut self) -> Result<ControlEntry,ForthError> {
         self.cstack.pop().ok_or(ForthError::ControlStackUnderflow)
     }
@@ -1003,6 +1019,24 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    fn cpop_case(&mut self) -> Result<XT, ForthError> {
+        let ctl = self.cpop_entry()?;
+        if let ControlEntry::CaseEntry{exit_xt} = ctl {
+            Ok(exit_xt)
+        } else {
+            Err(ForthError::InvalidControlEntry(ctl))
+        }
+    }
+
+    fn cpop_case_of(&mut self) -> Result<(XT,XT), ForthError> {
+        let ctl = self.cpop_entry()?;
+        if let ControlEntry::OfEntry{exit_xt, next_xt} = ctl {
+            Ok((exit_xt,next_xt))
+        } else {
+            Err(ForthError::InvalidControlEntry(ctl))
+        }
+    }
+
     fn cpop_index(&mut self) -> Result<i32,ForthError> {
         let ctl = self.cpop_entry()?;
         if let ControlEntry::Index(idx) = ctl {
@@ -1016,6 +1050,15 @@ impl<'tf> ToyForth<'tf> {
         let ctl = self.cstack.last().ok_or(ForthError::ControlStackUnderflow)?;
         if let ControlEntry::Index(idx) = ctl {
             Ok(*idx)
+        } else {
+            Err(ForthError::InvalidControlEntry(*ctl))
+        }
+    }
+
+    fn cpeek_case(&mut self) -> Result<XT,ForthError> {
+        let ctl = self.cstack.last().ok_or(ForthError::ControlStackUnderflow)?;
+        if let ControlEntry::CaseEntry{exit_xt} = ctl {
+            Ok(*exit_xt)
         } else {
             Err(ForthError::InvalidControlEntry(*ctl))
         }
@@ -2605,6 +2648,69 @@ impl<'tf> ToyForth<'tf> {
         } else {
             return Err(ForthError::InvalidControlEntry(ctl));
         }
+
+        Ok(())
+    }
+
+    fn builtin_case(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+        self.add_instr(Instr::Branch(2));
+        let exit_xt = self.add_instr(Instr::Branch(0));
+
+        self.cpush_case(exit_xt);
+        Ok(())
+    }
+
+    fn builtin_of(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let exit_xt = self.cpeek_case()?;
+
+        self.add_instr(Instr::Over);
+        self.add_instr(Instr::BinaryOp(BinOp::Equal));
+        let next_xt = self.add_instr(Instr::BranchOnZero(0));
+        self.add_instr(Instr::Drop);
+
+        self.cpush_case_of(exit_xt, next_xt);
+        Ok(())
+    }
+
+    fn builtin_endof(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let (exit_xt,next_xt) = self.cpop_case_of()?;
+
+        // branch to end
+        {
+            let end_xt = self.mark_code();
+            let delta : i32 = ((exit_xt.0 as i64) - (end_xt.0 as i64)) as i32;
+            self.add_instr(Instr::Branch(delta));
+        }
+
+        {
+            let xt = self.mark_code();
+            let delta : i32 = ((xt.0 as i64) - (next_xt.0 as i64)) as i32;
+            self.code[next_xt.0 as usize] = Instr::BranchOnZero(delta);
+        }
+
+        Ok(())
+    }
+
+    fn builtin_endcase(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let exit_xt = self.cpop_case()?;
+
+        self.add_instr(Instr::Drop);
+
+        // TODO: sweep from exit_xt to the end, and rewire all of the
+        //       branches to exit_xt to be branches to the end.
+        //
+        //       Also eliminate exit_xt and the branch over it.
+
+        let xt = self.mark_code();
+        let delta : i32 = ((xt.0 as i64) - (exit_xt.0 as i64)) as i32;
+        self.code[exit_xt.0 as usize] = Instr::Branch(delta);
 
         Ok(())
     }
@@ -5359,6 +5465,57 @@ ACTION-OF defer3
         forth.interpret("' parse ' * <>").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop().unwrap(), Word::true_value());
+    }
+
+    #[test]
+    fn case_switches() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+: cs1 CASE 1 OF 111 ENDOF
+   2 OF 222 ENDOF
+   3 OF 333 ENDOF
+   >R 999 R>
+   ENDCASE
+;").unwrap();
+
+        forth.print_word_code("cs1");
+
+        forth.interpret("1 cs1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 111);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        forth.interpret("2 cs1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 222);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        forth.interpret("3 cs1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 333);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        forth.interpret("4 cs1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 999);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        forth.interpret("-1501 cs1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 999);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
+
+        forth.interpret("17 cs1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 999);
+        assert_eq!(forth.cstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), 0);
     }
 }
 
