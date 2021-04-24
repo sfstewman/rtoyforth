@@ -458,7 +458,6 @@ enum ForthError {
     ReturnStackUnderflow,
 
     InvalidOperation,
-    InvalidArgument,
     DivisionByZero,
 
     InvalidNumberBase,
@@ -489,6 +488,7 @@ enum ForthError {
 
     WordNotFound(ST),
 
+    InvalidArgument(Word),
     InvalidCell(XT),
     InvalidControlEntry(ControlEntry),
     InvalidIndex(Word),
@@ -551,7 +551,6 @@ impl ForthError {
             ForthError::RETURN_STACK_UNDERFLOW          => ForthError::ReturnStackUnderflow,
 
             ForthError::INVALID_OPERATION               => ForthError::InvalidOperation,
-            ForthError::INVALID_ARGUMENT                => ForthError::InvalidArgument,
             ForthError::DIVISION_BY_ZERO                => ForthError::DivisionByZero,
 
             ForthError::INVALID_NUMBER_BASE             => ForthError::InvalidNumberBase,
@@ -580,6 +579,9 @@ impl ForthError {
 
             ForthError::NOT_IMPLEMENTED                 => ForthError::NotImplemented,
 
+            // errors with state that we should be able to convert (not exhaustive):
+            // ForthError::INVALID_ARGUMENT                => ForthError::InvalidArgument,
+
             // FIXME: this isn't great...
             _ => { panic!("cannot convert code to error"); }
         }
@@ -592,7 +594,6 @@ impl ForthError {
             ForthError::ReturnStackUnderflow            => ForthError::RETURN_STACK_UNDERFLOW,
 
             ForthError::InvalidOperation                => ForthError::INVALID_OPERATION,
-            ForthError::InvalidArgument                 => ForthError::INVALID_ARGUMENT,
             ForthError::DivisionByZero		            => ForthError::DIVISION_BY_ZERO,
 
             ForthError::InvalidNumberBase	            => ForthError::INVALID_NUMBER_BASE,
@@ -620,6 +621,9 @@ impl ForthError {
             ForthError::NoMatchingLoopHead			    => ForthError::NO_MATCHING_LOOPHEAD,
 
             ForthError::NotImplemented                  => ForthError::NOT_IMPLEMENTED,
+
+            // some of these errors should produce an argument
+            ForthError::InvalidArgument(_)              => ForthError::INVALID_ARGUMENT,
             ForthError::WordNotFound(_)			        => ForthError::WORD_NOT_FOUND,
             ForthError::InvalidCell(_)			        => ForthError::INVALID_CELL,
             ForthError::InvalidControlEntry(_)			=> ForthError::INVALID_CONTROL_ENTRY,
@@ -2083,7 +2087,7 @@ impl<'tf> ToyForth<'tf> {
         // eprintln!("arg_len = {}",arg_len);
 
         if arg_len < 0 {
-            return Err(ForthError::InvalidArgument);
+            return Err(ForthError::NumberOutOfRange);
         }
 
         let st  = self.pop_str()?;
@@ -2092,7 +2096,7 @@ impl<'tf> ToyForth<'tf> {
         // eprintln!("v0 = {:?}",v0);
 
         if v0 < 0 {
-            return Err(ForthError::InvalidArgument);
+            return Err(ForthError::NumberOutOfRange);
         }
 
         let bytes = self.bytes_at(st)?;
@@ -2156,7 +2160,8 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_recurse(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
-        let xt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?.to_xt().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
+        let cxt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?;
+        let xt = cxt.to_xt().ok_or(ForthError::InvalidArgument(cxt))?; // XXX: need better error
         self.add_instr(Instr::DoCol(xt));
         Ok(())
     }
@@ -2276,20 +2281,16 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn pop_delim(&mut self) -> Result<u8, ForthError> {
-        match self.pop_kind() {
-            Some(WordKind::Int(v)) => {
-                if v > 0 && v < 256 {
-                    return Ok(v as u8);
-                }
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
-                return Err(ForthError::InvalidChar(v));
-            },
-            Some(_) => {
-                return Err(ForthError::InvalidArgument);
-            },
-            None => {
-                return Err(ForthError::StackUnderflow);
+        if let WordKind::Int(v) = w.kind() {
+            if v > 0 && v < 256 {
+                return Ok(v as u8);
             }
+
+            return Err(ForthError::InvalidChar(v));
+        } else {
+            return Err(ForthError::InvalidArgument(w));
         }
     }
 
@@ -2420,10 +2421,11 @@ impl<'tf> ToyForth<'tf> {
         self.add_instr(Instr::Unnest);
 
         let cdef = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?;
-        let xt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?.to_xt().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
+        let cxt  = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?;
+        let xt = cxt.to_xt().ok_or(ForthError::InvalidArgument(cxt))?; // XXX: need better error
 
         if cdef != Word(0) {
-            let st = cdef.to_str().ok_or(ForthError::InvalidArgument)?; // XXX: need better error
+            let st = cdef.to_str().ok_or(ForthError::InvalidArgument(cdef))?; // XXX: need better error
 
             self.dict.push(DictEntry{
                 st: st,
@@ -2947,61 +2949,53 @@ impl<'tf> ToyForth<'tf> {
 
     // nb: pop is only called from rust, so it's not a forth primitive
     pub fn peek_str(&self) -> Result<ST, ForthError> {
-        match self.peek_kind() {
-            Some(WordKind::Str(st)) => {
-                Ok(st)
-            },
-            Some(_) => {
-                Err(ForthError::InvalidArgument)
-            },
-            None => {
-                Err(ForthError::StackUnderflow)
-            }
+        let w = self.peek().ok_or(ForthError::StackUnderflow)?;
+
+        if let WordKind::Str(st) = w.kind() {
+            Ok(st)
+        } else {
+            Err(ForthError::InvalidArgument(w))
         }
     }
 
     fn pop_int(&mut self) -> Result<i32, ForthError> {
-        let v = self.pop_kind().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::Int(x) = v {
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+        if let WordKind::Int(x) = w.kind() {
             Ok(x)
         } else {
-            Err(ForthError::InvalidArgument)
+            Err(ForthError::InvalidArgument(w))
         }
     }
 
     fn pop_uint(&mut self) -> Result<u32, ForthError> {
-        let v = self.pop_kind().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::Int(x) = v {
-            Ok(x as u32)
-        } else {
-            Err(ForthError::InvalidArgument)
-        }
+        let v = self.pop_int()?;
+        Ok(v as u32)
     }
 
     fn pop_str(&mut self) -> Result<ST,ForthError> {
-        let v = self.pop_kind().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::Str(st) = v {
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+        if let WordKind::Str(st) = w.kind() {
             Ok(st)
         } else {
-            Err(ForthError::InvalidArgument)
+            Err(ForthError::InvalidArgument(w))
         }
     }
 
     fn pop_xt(&mut self) -> Result<XT,ForthError> {
-        let v = self.pop_kind().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::XT(xt) = v {
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+        if let WordKind::XT(xt) = w.kind() {
             Ok(xt)
         } else {
-            Err(ForthError::InvalidArgument)
+            Err(ForthError::InvalidArgument(w))
         }
     }
 
     fn pop_addr(&mut self) -> Result<Addr,ForthError> {
-        let v = self.pop_kind().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::Addr(addr) = v {
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+        if let WordKind::Addr(addr) = w.kind() {
             Ok(addr)
         } else {
-            Err(ForthError::InvalidArgument)
+            Err(ForthError::InvalidArgument(w))
         }
     }
 
