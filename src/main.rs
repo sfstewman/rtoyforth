@@ -762,7 +762,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("CHAR+", ToyForth::builtin_char_plus);
         tf.add_func("PARSE", ToyForth::builtin_parse);
 
-        tf.add_func(".", ToyForth::builtin_dot);
+        tf.add_func("..", ToyForth::builtin_dot_dot);
         tf.add_func(":", ToyForth::builtin_colon);
         tf.add_func(":NONAME", ToyForth::builtin_colon_noname);
         tf.add_immed(";", ToyForth::builtin_semi);
@@ -866,6 +866,8 @@ impl<'tf> ToyForth<'tf> {
         ]).unwrap();
 
         tf.interpret("\
+: . .. BL EMIT ;
+
 : 0<  0 < ;
 : 0>  0 > ;
 : 0=  0 = ;
@@ -916,7 +918,6 @@ impl<'tf> ToyForth<'tf> {
 
 : COUNT-DIGITS 1 >R BEGIN 10 / DUP 0<> WHILE R> 1+ >R REPEAT DROP R> ;
 
-\\ This isn't quite right.  It leaves a trailing space.
 : .R ( n1 n2 -- )
     OVER COUNT-DIGITS ( n1 n2 digs1 )
     - DUP       ( n1 n2 digs2 -- n1 n2-digs1 n2-digs1 )
@@ -925,7 +926,7 @@ impl<'tf> ToyForth<'tf> {
     ELSE
         DROP    ( n1 n2-digs1 -- n1 )
     THEN
-    .           ( n1 -- )
+    ..          ( n1 -- )
 ;
 
 ").unwrap();
@@ -2355,16 +2356,16 @@ impl<'tf> ToyForth<'tf> {
         (w0,w1,w2)
     }
 
-    fn builtin_dot(&mut self) -> Result<(), ForthError> {
+    fn builtin_dot_dot(&mut self) -> Result<(), ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
         if let Some(out) = &mut self.out_stream {
             let mut wr = out.borrow_mut();
 
             if let WordKind::Int(n) = w.kind() {
-                write!(wr, "{} ", n)?;
+                write!(wr, "{}", n)?;
             } else {
-                write!(wr, "{} ", w)?;
+                write!(wr, "{}", w)?;
             }
             wr.flush()?;
         }
