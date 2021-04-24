@@ -788,6 +788,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("I", ToyForth::builtin_loop_ind0);
         tf.add_immed("J", ToyForth::builtin_loop_ind1);
 
+        tf.add_immed("UNLOOP", ToyForth::builtin_unloop);
         tf.add_immed("LEAVE", ToyForth::builtin_leave);
 
         tf.add_immed("BEGIN", ToyForth::builtin_begin);
@@ -2521,7 +2522,14 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_unloop(&mut self) -> Result<(), ForthError> {
-        Err(ForthError::NotImplemented)
+        // TODO: add some safety here
+        //
+        // Look through the control stack to ensure that there's a valid DO..LOOP
+        //
+        // We should probably keep a bit more state for this.
+        self.add_instr(Instr::ControlIndexDrop(2));
+
+        Ok(())
     }
 
     fn builtin_obracket(&mut self) -> Result<(), ForthError> {
@@ -4718,6 +4726,36 @@ BAR
         assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.pop_int().unwrap(), 128);
+    }
+
+    #[test]
+    fn loop_unloop_exit() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+: TEST ( num1 niter -- num2 iters )
+    .\" Starting value \" OVER . CR
+    0 ?DO
+        2 *
+        DUP 15 / +
+        1+
+        .\" Iter \" I 1+ . .\" value \" DUP . CR
+        DUP 35 > IF UNLOOP EXIT THEN
+    LOOP
+;").unwrap();
+
+        forth.stdout_interpret("1 10 TEST");
+        // iteration        value
+        // start            1
+        // 1                3
+        // 2                7
+        // 3                15
+        // 4                33
+        // 5                66 + 4 + 1 = 71
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 71);
+        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.cstack_depth(), 0);
     }
 
     #[test]
