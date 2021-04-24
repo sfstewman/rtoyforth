@@ -462,7 +462,7 @@ enum ForthError {
     UnfinishedColonDefinition,
     DictEmpty,
 
-    DeferNotSet,
+    DeferredFunctionNotSet,
     NotDeferredFunction,
 
     NoMatchingLoopHead,
@@ -508,7 +508,7 @@ impl ForthError {
     const DEFINING_WORD_INVALID             : u32 = 129;
     const UNFINISHED_COLON_DEFINITION       : u32 = 120;
     const DICT_EMPTY                        : u32 = 121;
-    const DEFER_NOT_SET                     : u32 = 122;
+    const DEFERRED_FUNCTION_NOT_SET         : u32 = 122;
     const NOT_DEFERRED_FUNCTION             : u32 = 123;
     const NO_MATCHING_LOOPHEAD              : u32 = 124;
     const NOT_IMPLEMENTED                   : u32 = 125;
@@ -555,7 +555,7 @@ impl ForthError {
             ForthError::UNFINISHED_COLON_DEFINITION     => ForthError::UnfinishedColonDefinition,
             ForthError::DICT_EMPTY                      => ForthError::DictEmpty,
 
-            ForthError::DEFER_NOT_SET                   => ForthError::DeferNotSet,
+            ForthError::DEFERRED_FUNCTION_NOT_SET       => ForthError::DeferredFunctionNotSet,
             ForthError::NOT_DEFERRED_FUNCTION           => ForthError::NotDeferredFunction,
 
             ForthError::NO_MATCHING_LOOPHEAD            => ForthError::NoMatchingLoopHead,
@@ -596,7 +596,7 @@ impl ForthError {
             ForthError::UnfinishedColonDefinition		=> ForthError::UNFINISHED_COLON_DEFINITION,
             ForthError::DictEmpty			            => ForthError::DICT_EMPTY,
 
-            ForthError::DeferNotSet			            => ForthError::DEFER_NOT_SET,
+            ForthError::DeferredFunctionNotSet			=> ForthError::DEFERRED_FUNCTION_NOT_SET,
             ForthError::NotDeferredFunction             => ForthError::NOT_DEFERRED_FUNCTION,
 
             ForthError::NoMatchingLoopHead			    => ForthError::NO_MATCHING_LOOPHEAD,
@@ -677,7 +677,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_instr(Instr::Bye);
 
         tf.invalid_deferred_xt = tf.mark_code();
-        tf.add_instr(Instr::Error(ForthError::DEFER_NOT_SET));
+        tf.add_instr(Instr::Error(ForthError::DEFERRED_FUNCTION_NOT_SET));
 
         // set up standard dictionary
         tf.add_prim("BYE", Instr::Bye);
@@ -793,6 +793,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("DEFER", ToyForth::builtin_defer);
         tf.add_func("DEFER!", ToyForth::builtin_defer_bang);
         tf.add_func("DEFER@", ToyForth::builtin_defer_at);
+        tf.add_func("ACTION-OF", ToyForth::builtin_action_of);
 
         // debugging
         tf.add_func("/STACKS", ToyForth::builtin_at_stacks);
@@ -1816,6 +1817,38 @@ impl<'tf> ToyForth<'tf> {
 
         match self.code[code_ind] {
             Instr::Jump(xt) => {
+                self.push(xt.to_word())?;
+            },
+            _ => {
+                return Err(ForthError::NotDeferredFunction);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn builtin_action_of(&mut self) -> Result<(), ForthError> {
+        let st = self.next_word(' ' as u8, u8::MAX as usize)?;
+        let s = self.maybe_string_at(st)?;
+
+        let entry = self.lookup_dict_entry(s)?;
+
+        if !entry.is_deferred() {
+            return Err(ForthError::NotDeferredFunction);
+        }
+
+        let deferred_xt = entry.xt;
+
+        let code_ind = deferred_xt.0 as usize;
+        if code_ind >= self.code.len() {
+            return Err(ForthError::FunctionSpaceOverflow);
+        }
+
+        match self.code[code_ind] {
+            Instr::Jump(xt) => {
+                if xt == self.invalid_deferred_xt {
+                    return Err(ForthError::DeferredFunctionNotSet);
+                }
                 self.push(xt.to_word())?;
             },
             _ => {
@@ -4854,6 +4887,10 @@ DEFER defer3
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_xt().unwrap(), star_xt);
         assert_eq!(forth.pop_int().unwrap(), 6);
+
+        forth.interpret("ACTION-OF defer3").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_xt().unwrap(), star_xt);
     }
 }
 
