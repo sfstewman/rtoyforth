@@ -816,6 +816,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("DEFER!", ToyForth::builtin_defer_bang);
         tf.add_func("DEFER@", ToyForth::builtin_defer_at);
         tf.add_immed("ACTION-OF", ToyForth::builtin_action_of);
+        tf.add_immed("IS", ToyForth::builtin_is);
 
         // debugging
         tf.add_func("/STACKS", ToyForth::builtin_at_stacks);
@@ -1870,6 +1871,30 @@ impl<'tf> ToyForth<'tf> {
         } else {
             self.push(deferred_xt.to_word());
             self.builtin_defer_at()?;
+        }
+
+        Ok(())
+    }
+
+    fn builtin_is(&mut self) -> Result<(), ForthError> {
+        let st = self.next_word(' ' as u8, u8::MAX as usize)?;
+        let s = self.maybe_string_at(st)?;
+
+        let entry = self.lookup_dict_entry(s)?;
+
+        if !entry.is_deferred() {
+            return Err(ForthError::NotDeferredFunction);
+        }
+
+        let deferred_xt = entry.xt;
+
+        if self.compiling() {
+            let defer_bang_xt = self.lookup_word("DEFER!")?;
+            self.add_instr(Instr::Push(deferred_xt.to_word()));
+            self.add_instr(Instr::DoCol(defer_bang_xt));
+        } else {
+            self.push(deferred_xt.to_word())?;
+            self.builtin_defer_bang()?;
         }
 
         Ok(())
@@ -4906,6 +4931,8 @@ DEFER defer3
 ").unwrap();
 
         let star_xt = forth.lookup_word("*").unwrap();
+        let plus_xt = forth.lookup_word("+").unwrap();
+        let minus_xt = forth.lookup_word("-").unwrap();
 
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_xt().unwrap(), star_xt);
@@ -4932,6 +4959,26 @@ action-of-defer3 foo
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), 123);
         assert_eq!(forth.pop_xt().unwrap(), star_xt);
+
+
+        // Test: interpretation semantics of IS
+        forth.interpret("\
+' + IS defer3
+ACTION-OF defer3
+' defer3 DEFER@").unwrap();
+
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_xt().unwrap(), plus_xt);
+        assert_eq!(forth.pop_xt().unwrap(), plus_xt);
+
+        // Test: compilation semantics of IS
+        forth.interpret("\
+: is-defer3 IS defer3 ;
+' - is-defer3 ACTION-OF defer3
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_xt().unwrap(), minus_xt);
     }
 
     #[test]
