@@ -426,6 +426,7 @@ struct ToyForth<'tf> {
 
     input: String,
     input_off: usize,
+    last_input_off: usize,
 
     // in_stream: Option<Rc<RefCell<(dyn std::io::BufRead)>>>,
     in_stream: Option<Rc<RefCell<(dyn LineReader)>>>,
@@ -480,7 +481,6 @@ enum ForthError {
     InvalidAddress(Addr),
     InvalidCountedString(ST),
     InvalidStringValue(u32),
-    InvalidDelimiter(i32),
     InvalidFunction(u32),
 
     IOError(std::io::Error),
@@ -523,9 +523,8 @@ impl ForthError {
     const INVALID_ADDRESS                   : u32 = 134;
     const INVALID_COUNTED_STRING            : u32 = 135;
     const INVALID_STRING_VALUE              : u32 = 136;
-    const INVALID_DELIMITER                 : u32 = 137;
-    const INVALID_FUNCTION                  : u32 = 138;
-    const IO_ERROR                          : u32 = 139;
+    const INVALID_FUNCTION                  : u32 = 137;
+    const IO_ERROR                          : u32 = 138;
 
     fn from_code(code: u32) -> ForthError {
         match code {
@@ -614,7 +613,6 @@ impl ForthError {
             ForthError::InvalidAddress(_)				=> ForthError::INVALID_ADDRESS,
             ForthError::InvalidCountedString(_)			=> ForthError::INVALID_COUNTED_STRING,
             ForthError::InvalidStringValue(_)			=> ForthError::INVALID_STRING_VALUE,
-            ForthError::InvalidDelimiter(_)				=> ForthError::INVALID_DELIMITER,
             ForthError::InvalidFunction(_)				=> ForthError::INVALID_FUNCTION,
             ForthError::IOError(_)			            => ForthError::IO_ERROR,
         }
@@ -669,6 +667,7 @@ impl<'tf> ToyForth<'tf> {
 
             input: std::string::String::new(),
             input_off: 0,
+            last_input_off: 0,
 
             in_stream: None,
             out_stream: None,
@@ -1109,6 +1108,79 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn builtin_interpret(&mut self) -> Result<(), ForthError> {
+        let ret = self.inner_interpret();
+        if let Err(err) = &ret {
+            match err {
+                ForthError::WordNotFound(st) => {
+                    if let Ok(s) = self.maybe_string_at(*st) {
+                        eprintln!("Word not found: {}", s);
+                    } else {
+                        let b = self.bytes_at(*st);
+                        eprintln!("Word not found (bytes): {:?}", b);
+                    }
+                },
+                ForthError::InvalidCell(xt) => {
+                    eprintln!("Invalid cell at xt = {}", xt.0);
+                },
+                ForthError::InvalidControlEntry(ctl) => {
+                    // TODO: print control stack
+                    eprintln!("Invalid control entry: {:?}", ctl);
+                },
+                ForthError::InvalidIndex(w) => {
+                    eprintln!("Invalid index: {:?}", w);
+                },
+                ForthError::InvalidControlInstruction(xt) => {
+                    // TODO: print instructions around this one
+                    eprintln!("Invalid control instruction xt={:?}", xt.0);
+                },
+                ForthError::InvalidExecutionToken(w) => {
+                    eprintln!("Invalid execution token (expected XT): {:?}", w);
+                },
+                ForthError::InvalidString(st) => {
+                    let b = self.bytes_at(*st);
+                    eprintln!("Invalid string (not utf8): st={:?} bytes={:?}", st, b);
+                },
+                ForthError::InvalidChar(value) => {
+                    eprintln!("Invalid char (not in range): {}", value);
+                },
+                ForthError::InvalidAddress(addr) => {
+                    eprintln!("Invalid address (out of range or not a valid builtin): {:?}", addr);
+                },
+                ForthError::InvalidCountedString(st) => {
+                    let b = self.bytes_at(*st);
+                    eprintln!("Invalid counted string (len != count): st={:?}, bytes={:?}", st,b);
+                },
+                ForthError::InvalidStringValue(val) => {
+                    eprintln!("Invalid string value: u32 {:x} is not a valid string", val);
+                },
+                ForthError::InvalidFunction(ind) => {
+                    eprintln!("Invalid function index {}", ind);
+                },
+
+                ForthError::IOError(err) => {
+                    eprintln!("IO Error: {}", err);
+                },
+
+                _ => {
+                    eprintln!("Error: {:?}", err);
+                }
+            }
+
+            eprintln!("Input: {}", self.input);
+            // FIXME: correctly handle utf-8 input...
+            let pfx = format!("{:>width$}", "^", width=self.last_input_off+1);
+            let sfx = if self.input_off > self.last_input_off {
+                format!("{:->width$}", "^", width=self.input_off-self.last_input_off)
+            } else {
+                "".to_string()
+            };
+            eprintln!("       {}{}", pfx,sfx);
+        }
+
+        ret
+    }
+
+    pub fn inner_interpret(&mut self) -> Result<(), ForthError> {
         loop {
             self.push_int(' ' as i32)?;
             self.builtin_parse()?;
@@ -1204,6 +1276,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn builtin_refill(&mut self) -> Result<(), ForthError> {
+        self.last_input_off = 0;
         self.input_off = 0;
         self.input.clear();
 
@@ -2156,7 +2229,7 @@ impl<'tf> ToyForth<'tf> {
                     return Ok(v as u8);
                 }
 
-                return Err(ForthError::InvalidDelimiter(v));
+                return Err(ForthError::InvalidChar(v));
             },
             Some(_) => {
                 return Err(ForthError::InvalidArgument);
@@ -2575,6 +2648,7 @@ impl<'tf> ToyForth<'tf> {
 
         let word_off = off0 + w0;
         let word_end = off0 + w1;
+        self.last_input_off = self.input_off;
         self.input_off = off0 + w2;
 
         let len = word_end - word_off;
