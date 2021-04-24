@@ -815,7 +815,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("DEFER", ToyForth::builtin_defer);
         tf.add_func("DEFER!", ToyForth::builtin_defer_bang);
         tf.add_func("DEFER@", ToyForth::builtin_defer_at);
-        tf.add_func("ACTION-OF", ToyForth::builtin_action_of);
+        tf.add_immed("ACTION-OF", ToyForth::builtin_action_of);
 
         // debugging
         tf.add_func("/STACKS", ToyForth::builtin_at_stacks);
@@ -1863,21 +1863,13 @@ impl<'tf> ToyForth<'tf> {
 
         let deferred_xt = entry.xt;
 
-        let code_ind = deferred_xt.0 as usize;
-        if code_ind >= self.code.len() {
-            return Err(ForthError::FunctionSpaceOverflow);
-        }
-
-        match self.code[code_ind] {
-            Instr::Jump(xt) => {
-                if xt == self.invalid_deferred_xt {
-                    return Err(ForthError::DeferredFunctionNotSet);
-                }
-                self.push(xt.to_word())?;
-            },
-            _ => {
-                return Err(ForthError::NotDeferredFunction);
-            }
+        if self.compiling() {
+            let defer_at_xt = self.lookup_word("DEFER@")?;
+            self.add_instr(Instr::Push(deferred_xt.to_word()));
+            self.add_instr(Instr::DoCol(defer_at_xt));
+        } else {
+            self.push(deferred_xt.to_word());
+            self.builtin_defer_at()?;
         }
 
         Ok(())
@@ -4905,6 +4897,7 @@ GT7
     fn defer_and_related() {
         let mut forth = ToyForth::new();
 
+        // Test basic DEFER, DEFER!, and DEFER@ words
         forth.interpret("\
 DEFER defer3
 ' * ' defer3 DEFER!
@@ -4918,8 +4911,26 @@ DEFER defer3
         assert_eq!(forth.pop_xt().unwrap(), star_xt);
         assert_eq!(forth.pop_int().unwrap(), 6);
 
+
+        // Test interpretation semantics of ACTION-OF
         forth.interpret("ACTION-OF defer3").unwrap();
         assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_xt().unwrap(), star_xt);
+
+
+        // Test compilation semantics of ACTION-OF
+        forth.interpret("\
+: action-of-defer3 ACTION-OF defer3 ;
+").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("\
+: foo 123 ;
+action-of-defer3 foo
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 123);
         assert_eq!(forth.pop_xt().unwrap(), star_xt);
     }
 
