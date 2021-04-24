@@ -171,6 +171,24 @@ impl ST {
 
         Word(v | ST::ST_BITS)
     }
+
+    fn descr(self) -> std::string::String {
+        let w = self.to_word();
+        match self {
+            ST::Allocated(off) => {
+                format!("[st {}] allocated[addr={}, len={}]", w.0, self.addr(), self.len())
+            },
+            ST::PadSpace(loc) => {
+                format!("[st {}] pad[off={}, len={}]", w.0, loc.off, loc.len)
+            },
+            ST::WordSpace(loc) => {
+                format!("[st {}] word[off={}, len={}]", w.0, loc.off, loc.len)
+            },
+            ST::InputSpace(loc) => {
+                format!("[st {}] input[off={}, len={}]", w.0, loc.off, loc.len)
+            },
+        }
+    }
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
@@ -1012,9 +1030,10 @@ impl<'tf> ToyForth<'tf> {
                 let s0 = self.maybe_string_at(st);
                 if let Ok(s) = s0 {
                     eprintln!("[D {:3}] {:?} \"{}\"", i,w.kind(), s);
-                } else {
-                    let b = self.bytes_at(st);
+                } else if let Ok(b) = self.bytes_at(st) {
                     eprintln!("[D {:3}] {:?} {:?}", i,w.kind(), b);
+                } else {
+                    eprintln!("[D {:3}] invalid ST {}", i, st.descr());
                 }
             } else {
                 eprintln!("[D {:3}] {:?}", i,w.kind());
@@ -1605,60 +1624,60 @@ impl<'tf> ToyForth<'tf> {
         ToyForth::add_string_to_pool(&mut self.strings, s)
     }
 
-    pub fn bytes_at(&self, st: ST) -> &[u8] {
+    pub fn bytes_at(&self, st: ST) -> Result<&[u8],ForthError> {
         match st {
             ST::Allocated(val) => {
                 let len = (val&0xff) as usize;
                 let off = (val >> 8) as usize;
 
                 if off >= self.strings.len() {
-                    panic!("invalid string token");
+                    return Err(ForthError::InvalidString(st));
                 }
 
                 let ind0 = off;
                 let ind1 = off + len;
 
                 if ind1 > self.strings.len() {
-                    panic!("invalid allocated string token");
+                    return Err(ForthError::InvalidString(st));
                 }
 
-                &self.strings[ind0..ind1]
+                Ok(&self.strings[ind0..ind1])
             },
             ST::PadSpace(loc) => {
                 let i0 = loc.off as usize;
                 let i1 = (loc.off + loc.len) as usize;
 
                 if i0 >= self.pad.len() || i1 > self.pad.len() {
-                    panic!("invalid PAD string token");
+                    return Err(ForthError::InvalidString(st));
                 }
 
-                &self.pad[i0..i1]
+                Ok(&self.pad[i0..i1])
             },
             ST::WordSpace(loc) => {
                 let i0 = loc.off as usize;
                 let i1 = (loc.off + loc.len) as usize;
 
                 if i0 >= self.word.len() || i1 > self.word.len() {
-                    panic!("invalid PAD string token");
+                    return Err(ForthError::InvalidString(st));
                 }
 
-                &self.word[i0..i1]
+                Ok(&self.word[i0..i1])
             },
             ST::InputSpace(loc) => {
                 let i0 = loc.off as usize;
                 let i1 = (loc.off + loc.len) as usize;
 
                 if i0 > self.input.len() || i1 > self.input.len() {
-                    panic!("invalid input string token");
+                    return Err(ForthError::InvalidString(st));
                 }
 
-                &self.input[i0..i1].as_bytes()
+                Ok(&self.input[i0..i1].as_bytes())
             },
         }
     }
 
     pub fn maybe_counted_string_at(&self, st: ST) -> Result<&str, ForthError> {
-        let b = self.bytes_at(st);
+        let b = self.bytes_at(st)?;
 
         // eprintln!("bytes = {:?}", b);
         // eprintln!("word_space = {:?}", self.word);
@@ -1676,7 +1695,8 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn maybe_string_at(&self, st: ST) -> Result<&str, ForthError> {
-        return std::str::from_utf8(self.bytes_at(st)).map_err(|_| ForthError::InvalidString(st));
+        let b = self.bytes_at(st)?;
+        return std::str::from_utf8(b).map_err(|_| ForthError::InvalidString(st));
     }
 
     pub fn string_at(&self, st: ST) -> &str {
@@ -2075,7 +2095,7 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::InvalidArgument);
         }
 
-        let bytes = self.bytes_at(st);
+        let bytes = self.bytes_at(st)?;
         let len = std::cmp::min(arg_len as usize, bytes.len());
 
         // eprintln!("bytes = {:?}, len = {}, arg_len = {}, bytes.len() = {}",
@@ -2703,7 +2723,7 @@ impl<'tf> ToyForth<'tf> {
 
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
 
-        let b = self.bytes_at(st);
+        let b = self.bytes_at(st)?;
         if b.len() == 0 {
             return Err(ForthError::InvalidEmptyString);
         }
@@ -2717,7 +2737,7 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_char(&mut self) -> Result<(), ForthError> {
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
 
-        let b = self.bytes_at(st);
+        let b = self.bytes_at(st)?;
         if b.len() == 0 {
             return Err(ForthError::InvalidEmptyString);
         }
@@ -2729,7 +2749,7 @@ impl<'tf> ToyForth<'tf> {
 
     fn builtin_char_at(&mut self) -> Result<(), ForthError> {
         let st = self.pop_str()?;
-        let b = *self.bytes_at(st).first().ok_or(ForthError::InvalidEmptyString)?;
+        let b = *self.bytes_at(st)?.first().ok_or(ForthError::InvalidEmptyString)?;
         self.push_int(b as i32)?;
         Ok(())
     }
@@ -2749,7 +2769,7 @@ impl<'tf> ToyForth<'tf> {
         let len = st.len() as usize;
 
         // if only there was some way to avoid making this copy...
-        let tmp = self.bytes_at(st).to_vec();
+        let tmp = self.bytes_at(st)?.to_vec();
 
         let wstr : &mut [u8] = &mut self.word[..];
         if len+1 >= wstr.len() {
@@ -3554,7 +3574,8 @@ mod tests {
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 9);
-        assert_eq!(forth.bytes_at(forth.peek_str().unwrap()), &vec![5 as u8, 'x' as u8, 't' as u8, 'e' as u8, 's' as u8, 't' as u8]);
+        assert_eq!(forth.bytes_at(forth.peek_str().unwrap()).unwrap(),
+            &vec![5 as u8, 'x' as u8, 't' as u8, 'e' as u8, 's' as u8, 't' as u8]);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "xtest");
 
         forth.dup().unwrap();
@@ -3562,7 +3583,8 @@ mod tests {
         assert_eq!(forth.pop_int().unwrap(), 5 as i32);
 
         forth.builtin_char_plus().unwrap();
-        assert_eq!(forth.bytes_at(forth.peek_str().unwrap()), &vec!['x' as u8, 't' as u8, 'e' as u8, 's' as u8, 't' as u8]);
+        assert_eq!(forth.bytes_at(forth.peek_str().unwrap()).unwrap(),
+            &vec!['x' as u8, 't' as u8, 'e' as u8, 's' as u8, 't' as u8]);
         forth.builtin_char_at().unwrap();
         assert_eq!(forth.pop_int().unwrap(), 'x' as i32);
 
