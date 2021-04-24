@@ -335,7 +335,7 @@ enum Instr {
     BranchOnZero(i32),  // branches if stack top is 0
     ControlIndexPush(u8),
     ControlIndexDrop(u8),
-    ControlIteration,
+    ControlIteration{incr:bool},
     ControlIndexPeek(u32),
     Jump(XT),
     Error(u32),
@@ -785,6 +785,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("DO", ToyForth::builtin_do);
         tf.add_immed("?DO", ToyForth::builtin_qdo);
         tf.add_immed("LOOP", ToyForth::builtin_loop);
+        tf.add_immed("+LOOP", ToyForth::builtin_plus_loop);
         tf.add_immed("I", ToyForth::builtin_loop_ind0);
         tf.add_immed("J", ToyForth::builtin_loop_ind1);
 
@@ -2727,7 +2728,7 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    fn builtin_loop(&mut self) -> Result<(), ForthError> {
+    fn compile_loop(&mut self, incr: bool) -> Result<(), ForthError> {
         self.check_compiling()?;
 
         let do_xt : XT;
@@ -2758,7 +2759,7 @@ impl<'tf> ToyForth<'tf> {
         // ControlIteration: ( -- 0 | 1 ) (C: n1 n2 -- n1 n3 | )
         // if n2<n1, pushes n1 and n3=n2-1 onto the control stack, pushes 0 onto the data stack
         // if n2>=1, pops n1,n2 from the control stack, pushes 1 onto the data stack
-        self.add_instr(Instr::ControlIteration);
+        self.add_instr(Instr::ControlIteration{incr: incr});
 
         // branch back to DO (after loop header)
         {
@@ -2783,6 +2784,14 @@ impl<'tf> ToyForth<'tf> {
         }
 
         Ok(())
+    }
+
+    fn builtin_loop(&mut self) -> Result<(), ForthError> {
+        self.compile_loop(false)
+    }
+
+    fn builtin_plus_loop(&mut self) -> Result<(), ForthError> {
+        self.compile_loop(true)
     }
 
     fn builtin_loop_ind0(&mut self) -> Result<(), ForthError> {
@@ -3376,7 +3385,9 @@ impl<'tf> ToyForth<'tf> {
 
                     pc += 1;
                 },
-                Instr::ControlIteration => {
+                Instr::ControlIteration{incr} => {
+                    let delta = if incr { self.pop_int()? } else { 1 };
+
                     let clen = self.cstack.len();
                     if clen < 2 {
                         return Err(ForthError::ControlStackUnderflow);
@@ -3389,7 +3400,7 @@ impl<'tf> ToyForth<'tf> {
                     };
 
                     let next = if let ControlEntry::Index(idx) = self.cstack[clen-1] {
-                        idx+1
+                        idx+delta
                     } else {
                         return Err(ForthError::InvalidControlEntry(self.cstack[clen-1]));
                     };
@@ -4281,6 +4292,29 @@ mod tests {
         let mut forth = ToyForth::new();
 
         forth.interpret(": foo 3 0 do dup . 5 + loop ;").unwrap();
+
+        let foo_xt = forth.lookup_word("foo").unwrap();
+        for (i,instr) in forth.code[foo_xt.0 as usize..].iter().enumerate() {
+            eprintln!("[{:3}] {:?}", i, instr);
+            if let Instr::Unnest = *instr {
+                break
+            }
+        }
+
+        forth.interpret("10 foo").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 25);
+
+        forth.interpret("1 foo").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 16);
+    }
+
+    #[test]
+    fn plus_loop() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret(": foo 0 3 do dup . 5 + -1 +loop ;").unwrap();
 
         let foo_xt = forth.lookup_word("foo").unwrap();
         for (i,instr) in forth.code[foo_xt.0 as usize..].iter().enumerate() {
