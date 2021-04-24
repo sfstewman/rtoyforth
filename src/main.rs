@@ -1967,43 +1967,57 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn binary_op(&mut self, op: BinOp) -> Result<(),ForthError> {
-        let b = self.pop_int()?;
-        let a = self.pop_int()?;
+        // there's probably a more efficient way to do this...
+        let bw = self.pop().ok_or(ForthError::StackUnderflow)?;
+        let aw = self.pop().ok_or(ForthError::StackUnderflow)?;
+
+        match op {
+            BinOp::Equal    => { self.push(Word::bool(aw.0 == bw.0))?; return Ok(()); },
+            BinOp::NotEqual => { self.push(Word::bool(aw.0 != bw.0))?; return Ok(()); },
+
+            // otherwise handle below
+            _ => {},
+        }
+
+        let b = bw.to_int().ok_or(ForthError::InvalidArgument(bw))?;
+        let a = aw.to_int().ok_or(ForthError::InvalidArgument(aw))?;
 
         // eprintln!("op = {:?}, a={}, b={}", op, a,b);
-        match op {
-            BinOp::Plus  => { self.push(Word::int(a+b))?; },
-            BinOp::Minus => { self.push(Word::int(a-b))?; },
-            BinOp::Star  => { self.push(Word::int(a*b))?; },
+        let result: Word = match op {
+            BinOp::Plus  => { Word::int(a+b) },
+            BinOp::Minus => { Word::int(a-b) },
+            BinOp::Star  => { Word::int(a*b) },
             BinOp::Slash => {
-                if b != 0 {
-                    self.push(Word::int(a/b))?;
-                } else {
+                if b == 0 {
                     return Err(ForthError::DivisionByZero);
                 }
+
+                Word::int(a/b)
             },
 
-            BinOp::And      => { self.push(Word::int(((a as u32) & (b as u32)) as i32))?; },
-            BinOp::Or       => { self.push(Word::int(((a as u32) | (b as u32)) as i32))?; },
-            BinOp::Xor      => { self.push(Word::int(((a as u32) ^ (b as u32)) as i32))?; },
+            BinOp::And      => { Word::int(((a as u32) & (b as u32)) as i32) },
+            BinOp::Or       => { Word::int(((a as u32) | (b as u32)) as i32) },
+            BinOp::Xor      => { Word::int(((a as u32) ^ (b as u32)) as i32) },
 
-            BinOp::Greater  => { self.push(Word::bool(a > b ))?; },
-            BinOp::Less     => { self.push(Word::bool(a < b ))?; },
-            BinOp::Equal    => { self.push(Word::bool(a == b))?; },
-            BinOp::NotEqual => { self.push(Word::bool(a != b))?; },
+            BinOp::Greater  => { Word::bool(a > b ) },
+            BinOp::Less     => { Word::bool(a < b ) },
 
-            BinOp::UnsignedGreater => { self.push(Word::bool( (a as u32) > (b as u32) ))?; },
-            BinOp::UnsignedLess    => { self.push(Word::bool( (a as u32) < (b as u32) ))?; },
+            BinOp::UnsignedGreater => { Word::bool( (a as u32) > (b as u32) ) },
+            BinOp::UnsignedLess    => { Word::bool( (a as u32) < (b as u32) ) },
 
             BinOp::LeftShift  => {
                 // TODO: check b for range
-                self.push(Word( ((a as u32) << (b as u32)) & Word::INT_MASK ))?;
+                Word( ((a as u32) << (b as u32)) & Word::INT_MASK )
             },
             BinOp::RightShift => {
                 // TODO: check b for range
-                self.push(Word( ((a as u32) >> (b as u32)) & Word::INT_MASK ))?;
+                Word( ((a as u32) >> (b as u32)) & Word::INT_MASK )
             },
-        }
+
+            BinOp::Equal | BinOp::NotEqual => { /* handled previously */ panic!("should not reach"); },
+        };
+
+        self.push(result)?;
 
         return Ok(());
     }
@@ -4907,6 +4921,27 @@ DEFER defer3
         forth.interpret("ACTION-OF defer3").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_xt().unwrap(), star_xt);
+    }
+
+    #[test]
+    fn equal_and_not_equal_work_for_xt_and_st() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("' parse ' parse =").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::true_value());
+
+        forth.interpret("' parse ' word =").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::false_value());
+
+        forth.interpret("' parse ' parse <>").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::false_value());
+
+        forth.interpret("' parse ' * <>").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::true_value());
     }
 }
 
