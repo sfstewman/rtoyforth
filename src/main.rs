@@ -51,8 +51,6 @@ enum ST {
 }
 
 impl ST {
-    const MAX_LENGTH : usize = 256;
-
     const MAX : u32 = 0x3fff_ffff;
     const MIN : u32 = 0;
     const MASK : u32 = 0x3fff_ffff;
@@ -67,6 +65,9 @@ impl ST {
     const OFF_MASK : u32 = 0x0000_00ff;
 
     const ST_BITS : u32 = Word::HIGH_BIT;
+
+    const MAX_LENGTH : usize = 255;
+    const MAX_OFFSET : usize = ST::ALLOC_MASK as usize;
 
     fn from_u32(val: u32) -> Result<ST,ForthError> {
         // check for valid string encoding
@@ -467,6 +468,8 @@ enum ForthError {
     StringTooLong,
     StringOffsetTooLarge,
     StringNotFound,
+    InvalidHexEscape,
+    StringNotTerminated,
 
     FunctionSpaceOverflow,
     DictSpaceOverflow,
@@ -495,6 +498,7 @@ enum ForthError {
     InvalidControlInstruction(XT),
     InvalidExecutionToken(Word),
     InvalidString(ST),
+    InvalidEscape(char),
     InvalidChar(i32),
     InvalidAddress(Addr),
     InvalidCountedString(ST),
@@ -517,32 +521,36 @@ impl ForthError {
     const STRING_TOO_LONG                   : u32 = 110;
     const STRING_OFFSET_TOO_LARGE           : u32 = 111;
     const STRING_NOT_FOUND                  : u32 = 112;
-    const FUNCTION_SPACE_OVERFLOW           : u32 = 113;
-    const DICT_SPACE_OVERFLOW               : u32 = 114;
-    const VAR_SPACE_OVERFLOW                : u32 = 115;
-    const STRING_SPACE_OVERFLOW             : u32 = 116;
-    const WORD_INVALID_WHILE_COMPILING      : u32 = 117;
-    const WORD_INVALID_WHILE_INTERPRETING   : u32 = 118;
-    const DEFINING_WORD_INVALID             : u32 = 129;
-    const UNFINISHED_COLON_DEFINITION       : u32 = 120;
-    const DICT_EMPTY                        : u32 = 121;
-    const DEFERRED_FUNCTION_NOT_SET         : u32 = 122;
-    const NOT_DEFERRED_FUNCTION             : u32 = 123;
-    const NO_MATCHING_LOOPHEAD              : u32 = 124;
-    const NOT_IMPLEMENTED                   : u32 = 125;
-    const WORD_NOT_FOUND                    : u32 = 126;
-    const INVALID_CELL                      : u32 = 127;
-    const INVALID_CONTROL_ENTRY             : u32 = 128;
-    const INVALID_INDEX                     : u32 = 129;
-    const INVALID_CONTROL_INSTRUCTION       : u32 = 130;
-    const INVALID_EXECUTION_TOKEN           : u32 = 131;
-    const INVALID_STRING                    : u32 = 132;
-    const INVALID_CHAR                      : u32 = 133;
-    const INVALID_ADDRESS                   : u32 = 134;
-    const INVALID_COUNTED_STRING            : u32 = 135;
-    const INVALID_STRING_VALUE              : u32 = 136;
-    const INVALID_FUNCTION                  : u32 = 137;
-    const IO_ERROR                          : u32 = 138;
+    const INVALID_HEX_ESCAPE                : u32 = 113;
+    const STRING_NOT_TERMINATED             : u32 = 114;
+
+    const FUNCTION_SPACE_OVERFLOW           : u32 = 115;
+    const DICT_SPACE_OVERFLOW               : u32 = 116;
+    const VAR_SPACE_OVERFLOW                : u32 = 117;
+    const STRING_SPACE_OVERFLOW             : u32 = 118;
+    const WORD_INVALID_WHILE_COMPILING      : u32 = 119;
+    const WORD_INVALID_WHILE_INTERPRETING   : u32 = 120;
+    const DEFINING_WORD_INVALID             : u32 = 121;
+    const UNFINISHED_COLON_DEFINITION       : u32 = 122;
+    const DICT_EMPTY                        : u32 = 123;
+    const DEFERRED_FUNCTION_NOT_SET         : u32 = 124;
+    const NOT_DEFERRED_FUNCTION             : u32 = 125;
+    const NO_MATCHING_LOOPHEAD              : u32 = 126;
+    const NOT_IMPLEMENTED                   : u32 = 127;
+    const WORD_NOT_FOUND                    : u32 = 128;
+    const INVALID_CELL                      : u32 = 129;
+    const INVALID_CONTROL_ENTRY             : u32 = 130;
+    const INVALID_INDEX                     : u32 = 131;
+    const INVALID_CONTROL_INSTRUCTION       : u32 = 132;
+    const INVALID_EXECUTION_TOKEN           : u32 = 133;
+    const INVALID_STRING                    : u32 = 134;
+    const INVALID_ESCAPE                    : u32 = 135;
+    const INVALID_CHAR                      : u32 = 136;
+    const INVALID_ADDRESS                   : u32 = 137;
+    const INVALID_COUNTED_STRING            : u32 = 138;
+    const INVALID_STRING_VALUE              : u32 = 139;
+    const INVALID_FUNCTION                  : u32 = 140;
+    const IO_ERROR                          : u32 = 141;
 
     fn from_code(code: u32) -> ForthError {
         match code {
@@ -560,6 +568,8 @@ impl ForthError {
             ForthError::STRING_TOO_LONG                 => ForthError::StringTooLong,
             ForthError::STRING_OFFSET_TOO_LARGE         => ForthError::StringOffsetTooLarge,
             ForthError::STRING_NOT_FOUND                => ForthError::StringNotFound,
+            ForthError::INVALID_HEX_ESCAPE              => ForthError::InvalidHexEscape,
+            ForthError::STRING_NOT_TERMINATED           => ForthError::StringNotTerminated,
 
             ForthError::FUNCTION_SPACE_OVERFLOW         => ForthError::FunctionSpaceOverflow,
             ForthError::DICT_SPACE_OVERFLOW             => ForthError::DictSpaceOverflow,
@@ -580,7 +590,8 @@ impl ForthError {
             ForthError::NOT_IMPLEMENTED                 => ForthError::NotImplemented,
 
             // errors with state that we should be able to convert (not exhaustive):
-            // ForthError::INVALID_ARGUMENT                => ForthError::InvalidArgument,
+            // ForthError::INVALID_ARGUMENT             => ForthError::InvalidArgument(word),
+            // ForthError::INVALID_ESCAPE               => ForthError::InvalidEscape(esc_char),
 
             // FIXME: this isn't great...
             _ => { panic!("cannot convert code to error"); }
@@ -603,6 +614,8 @@ impl ForthError {
             ForthError::StringTooLong		            => ForthError::STRING_TOO_LONG,
             ForthError::StringOffsetTooLarge            => ForthError::STRING_OFFSET_TOO_LARGE,
             ForthError::StringNotFound		            => ForthError::STRING_NOT_FOUND,
+            ForthError::InvalidHexEscape                => ForthError::INVALID_HEX_ESCAPE,
+            ForthError::StringNotTerminated             => ForthError::STRING_NOT_TERMINATED,
 
             ForthError::FunctionSpaceOverflow	        => ForthError::FUNCTION_SPACE_OVERFLOW,
             ForthError::DictSpaceOverflow		        => ForthError::DICT_SPACE_OVERFLOW,
@@ -631,6 +644,7 @@ impl ForthError {
             ForthError::InvalidControlInstruction(_)	=> ForthError::INVALID_CONTROL_INSTRUCTION,
             ForthError::InvalidExecutionToken(_)		=> ForthError::INVALID_EXECUTION_TOKEN,
             ForthError::InvalidString(_)				=> ForthError::INVALID_STRING,
+            ForthError::InvalidEscape(_)				=> ForthError::INVALID_ESCAPE,
             ForthError::InvalidChar(_)			        => ForthError::INVALID_CHAR,
             ForthError::InvalidAddress(_)				=> ForthError::INVALID_ADDRESS,
             ForthError::InvalidCountedString(_)			=> ForthError::INVALID_COUNTED_STRING,
@@ -796,7 +810,9 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func("TYPE", ToyForth::builtin_type);
         tf.add_immed("S\"", ToyForth::builtin_s_quote);
+        tf.add_immed("S\\\"", ToyForth::builtin_s_backslash_quote);
         tf.add_immed(".\"", ToyForth::builtin_dot_quote);
+        tf.add_immed("C\"", ToyForth::builtin_c_quote);
 
         tf.add_immed(".(", ToyForth::builtin_dot_oparen);
         tf.add_immed("(", ToyForth::builtin_oparen);
@@ -892,6 +908,8 @@ impl<'tf> ToyForth<'tf> {
     *       ( num div quot    -- num prod )
     -       ( num prod        -- rem )
 ;
+
+: COUNT DUP CHAR+ SWAP C@ ;
 
 \\ Should this be a builtin?
 : ?DUP DUP 0<> IF DUP THEN ;
@@ -2731,8 +2749,8 @@ impl<'tf> ToyForth<'tf> {
         }
 
         // TODO: Handle large offset by copying to word space?
-        if word_off > 255 {
-            return Err(ForthError::StringTooLong);
+        if word_off > self.word.len() || word_off > (u8::MAX as usize) || word_off + len > self.word.len() {
+            return Err(ForthError::StringOffsetTooLarge);
         }
 
         Ok(ST::input_space(word_off as u8,len as u8))
@@ -2816,7 +2834,7 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    fn add_string_to_quote(&mut self) -> Result<(ST,usize),ForthError> {
+    fn add_string_to_quote(&mut self, counted: bool) -> Result<(ST,usize),ForthError> {
         let off0 = self.input_off;
         let bytes = self.input.as_bytes();
 
@@ -2827,7 +2845,7 @@ impl<'tf> ToyForth<'tf> {
         self.input_off = off0 + w2;
 
         let len = word_end - word_off;
-        if len > 255 {
+        if (counted && len > ST::MAX_LENGTH-1) || (!counted && len > ST::MAX_LENGTH) {
             return Err(ForthError::StringTooLong);
         }
 
@@ -2835,9 +2853,15 @@ impl<'tf> ToyForth<'tf> {
             // allocate string
             let off = self.strings.len();
 
+            if counted {
+                self.strings.push( len as u8 );
+            }
+
+            let slen = if counted { len + 1 } else { len };
+
             self.strings.extend_from_slice(&bytes[word_off..word_end]);
             self.strings.push(0);
-            ST::allocated_space(off as u32,len as u8)
+            ST::allocated_space(off as u32,slen as u8)
         } else {
             // empty string
             ST::allocated_space(0,0)
@@ -2849,10 +2873,22 @@ impl<'tf> ToyForth<'tf> {
     pub fn builtin_s_quote(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
-        let (st,len) = self.add_string_to_quote()?;
+        let (st,len) = self.add_string_to_quote(false)?;
 
         self.add_instr(Instr::Push(st.to_word()));
         self.add_instr(Instr::Push(Word::int(len as i32)));
+        Ok(())
+    }
+
+    pub fn builtin_c_quote(&mut self) -> Result<(),ForthError> {
+        self.check_compiling()?;
+
+        // grab current location
+        let ind = self.strings.len();
+
+        let (st,len) = self.add_string_to_quote(true)?;
+
+        self.add_instr(Instr::Push(st.to_word()));
         Ok(())
     }
 
@@ -2889,6 +2925,129 @@ impl<'tf> ToyForth<'tf> {
 
         self.builtin_s_quote()?;
         self.add_instr(Instr::DoCol(type_xt));
+        Ok(())
+    }
+
+    fn hex2dec(dig: u8) -> Option<u8> {
+        let upper = dig.to_ascii_uppercase();
+
+        let zero  = '0' as u8;
+        let nine  = '9' as u8;
+        let let_a = 'A' as u8;
+        let let_f = 'F' as u8;
+
+        if upper >= zero && upper <= nine {
+            Some(upper - zero)
+        } else if upper >= let_a && upper <= let_f {
+            Some(10 + upper - let_a)
+        } else {
+            None
+        }
+    }
+
+    pub fn builtin_s_backslash_quote(&mut self) -> Result<(),ForthError> {
+        let off0 = self.input_off;
+        let bytes = &self.input.as_bytes();
+
+        // TODO: on error, truncate self.strings to str_off
+        let str_off = self.strings.len();
+
+        if str_off > ST::MAX_OFFSET {
+            return Err(ForthError::StringOffsetTooLarge);
+        }
+
+        let mut esc = false;
+        let mut end = false;
+        while !end && self.input_off < bytes.len() {
+            let b = bytes[self.input_off];
+            let ch = b as char;
+
+            eprintln!("offset {} len {} byte {} char {}", self.input_off, bytes.len(), b, ch);
+
+            if !esc {
+                match ch {
+                    '"'  => {
+                        end = true;
+                        self.input_off += 1;
+                    },
+                    '\\' => {
+                        esc = true;
+                        self.input_off += 1;
+                    },
+                    _ => {
+                        self.strings.push(b);
+                        self.input_off += 1;
+                    },
+                }
+            } else {
+                if ch == 'm' {  // CR/LF pair
+                    self.strings.push(13);
+                    self.strings.push(10);
+                    self.input_off += 1;
+                } else if ch == 'x' { // \x<hex><hex>
+                    if self.input_off+2 >= bytes.len() {
+                        // TODO: pass ST token
+                        return Err(ForthError::InvalidHexEscape);
+                    }
+
+                    let dig1 = bytes[self.input_off+1];
+                    let dig2 = bytes[self.input_off+2];
+                    let hex1 = ToyForth::hex2dec(dig1).ok_or(ForthError::InvalidHexEscape)?;
+                    let hex2 = ToyForth::hex2dec(dig2).ok_or(ForthError::InvalidHexEscape)?;
+
+                    self.strings.push(16*hex1 + hex2);
+                    self.input_off += 3;
+                } else if ch == 'n' { // newline, LF on Unix but implementation dependent
+                    // TODO: add implementation dependence...
+                    self.strings.push(10);
+                    self.input_off += 1;
+                } else {
+                    let esc_b : u8 = match ch {
+                        'a' =>  7,  // BEL  bell/alert
+                        'b' =>  8,  // BS   backspace
+                        'e' => 27,  // ESC  escape
+                        'f' => 12,  // FF   formfeed
+                        'l' => 10,  // LF   linefeed
+                        'r' => 13,  // CR   carriage return
+                        't' =>  9,  // HT   horizontal tab
+                        'v' => 11,  // VT   vertical tab
+                        'z' =>  0,  // NUL  null char
+
+                        'q' => '"' as u8,  // double quote
+                        '"' => '"' as u8,  // double quote
+
+                        _ => {
+                            // TODO: pass ST token
+                            return Err(ForthError::InvalidEscape(b as char));
+                        }
+                    };
+
+                    self.strings.push(esc_b);
+                    self.input_off += 1;
+                }
+
+                esc = false;
+            }
+        }
+
+        if !end {
+            return Err(ForthError::StringNotTerminated);
+        }
+
+        let len = self.strings.len() - str_off;
+        if len > ST::MAX_LENGTH {
+            return Err(ForthError::StringTooLong);
+        }
+
+        let st = if len > 0 {
+            self.strings.push(0);
+            ST::allocated_space(str_off as u32, len as u8)
+        } else {
+            ST::allocated_space(0,0)
+        };
+
+        self.push(st.to_word())?;
+        self.push_int(len as i32)?;
         Ok(())
     }
 
@@ -4145,6 +4304,47 @@ I 3   J 3
             forth.print_word_code("test");
             assert_eq!(forth.stack_depth(), 2);
 
+            let count = forth.pop_int().unwrap();
+            let st = forth.pop_str().unwrap();
+            assert_eq!(count, 8);
+            assert_eq!(forth.string_at(st), "foo bar ");
+        }
+    }
+
+    #[test]
+    fn s_backslash_quote_strings() {
+        let mut forth = ToyForth::new();
+
+        {
+            forth.interpret(": test S\\\" foo\\n\\\"bar\\\"\" ; test").unwrap();
+            forth.print_word_code("test");
+            assert_eq!(forth.stack_depth(), 2);
+
+            let count = forth.pop_int().unwrap();
+            let st = forth.pop_str().unwrap();
+            assert_eq!(count, 9);
+            assert_eq!(forth.string_at(st), "foo\n\"bar\"");
+        }
+    }
+
+    #[test]
+    fn c_quote_strings() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret(": test C\" foo bar \" ;").unwrap();
+
+        {
+            forth.interpret("test").unwrap();
+            forth.print_word_code("test");
+            assert_eq!(forth.stack_depth(), 1);
+            let st = forth.pop_str().unwrap();
+            assert_eq!(st.len(), 9);
+            assert_eq!(forth.counted_string_at(st), "foo bar ");
+        }
+
+        {
+            forth.interpret("test COUNT").unwrap();
+            assert_eq!(forth.stack_depth(), 2);
             let count = forth.pop_int().unwrap();
             let st = forth.pop_str().unwrap();
             assert_eq!(count, 8);
