@@ -862,6 +862,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("ACTION-OF", ToyForth::builtin_action_of);
         tf.add_immed("IS", ToyForth::builtin_is);
 
+        tf.add_func("CREATE", ToyForth::builtin_create);
+
         // debugging
         tf.add_func("/STACKS", ToyForth::builtin_at_stacks);
         tf.add_func("/CODE", ToyForth::builtin_at_code);
@@ -1543,10 +1545,6 @@ impl<'tf> ToyForth<'tf> {
         self.out_stream = old_out;
 
         return Ok(());
-    }
-
-    pub fn here(&self) -> u32 {
-        return self.code.len() as u32;
     }
 
     pub fn char_here(&self) -> u32 {
@@ -2524,6 +2522,25 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn builtin_create(&mut self) -> Result<(), ForthError> {
+        self.push_int(' ' as i32)?;
+        self.builtin_parse()?;
+
+        let len = self.pop_int()?;
+        let st = self.pop_str()?;
+        if len == 0 {
+            return Err(ForthError::InvalidEmptyString);
+        }
+
+        let addr = self.here();
+
+        // FIXME: completely unnecessary copy here...
+        let s = self.maybe_string_at(st)?.to_string();
+        self.add_word(&s, &[ Instr::Push(addr.to_word()), Instr::Unnest ], 0);
+
+        Ok(())
+    }
+
     fn builtin_constant(&mut self) -> Result<(), ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
@@ -3354,10 +3371,15 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    pub fn builtin_here(&mut self) -> Result<(),ForthError> {
+    pub fn here(&self) -> Addr {
         let here = self.vars.len();
+
         // TODO: check for overflow!
-        self.push(Addr(here as u32).to_word())?;
+        Addr(here as u32)
+    }
+
+    pub fn builtin_here(&mut self) -> Result<(),ForthError> {
+        self.push(self.here().to_word())?;
         Ok(())
     }
 
@@ -5522,6 +5544,30 @@ CONSTANT 1ST
         forth.interpret("16 , 2ND @").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 16);
+    }
+
+    #[test]
+    fn create() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+: MYVAR CREATE , ;
+").unwrap();
+
+        forth.interpret("\
+HERE CONSTANT 1ST   \\ grab current top of data addresses
+17 MYVAR FOO        \\ define variable using MYVAR
+
+1ST FOO =           \\ check that FOO was defined at previous top of data address
+
+FOO @               \\ access values via FOO and 1ST
+1ST @
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 17);
+        assert_eq!(forth.pop_int().unwrap(), 17);
+        assert_eq!(forth.pop_int().unwrap(), -1);
     }
 }
 
