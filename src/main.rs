@@ -891,7 +891,7 @@ impl<'tf> ToyForth<'tf> {
             Instr::Push(Word::int('\n' as i32)),
             Instr::Func(emit as u32),
             Instr::Unnest,
-        ]).unwrap();
+        ], 0).unwrap();
 
         tf.interpret("\
 : . .. BL EMIT ;
@@ -1625,13 +1625,13 @@ impl<'tf> ToyForth<'tf> {
         Ok((func_ind,xt))
     }
 
-    pub fn add_word(&mut self, word: &str, code: &[Instr]) -> Result<XT,ForthError> {
+    pub fn add_word(&mut self, word: &str, code: &[Instr], flags: u32) -> Result<XT,ForthError> {
         let xt = self.mark_code();
         for instr in code {
             self.add_instr(*instr);
         }
 
-        self.define_word(word,xt)?;
+        self.define_word(word,xt,flags)?;
         Ok(xt)
     }
 
@@ -1642,13 +1642,13 @@ impl<'tf> ToyForth<'tf> {
         self.add_string(&s)
     }
 
-    pub fn define_word(&mut self, word: &str, xt: XT) -> Result<ST,ForthError> {
+    pub fn define_word(&mut self, word: &str, xt: XT, flags: u32) -> Result<ST,ForthError> {
         let st = self.add_string(word)?;
 
         self.dict.push(DictEntry{
             st: st,
             xt: xt,
-            flags: 0,
+            flags: flags,
         });
 
         return Ok(st);
@@ -1940,21 +1940,11 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_defer(&mut self) -> Result<(), ForthError> {
-        let defer_xt = self.mark_code();
-        self.add_instr(Instr::Defer(self.invalid_deferred_xt));
-        self.add_instr(Instr::Unnest);
-
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
 
-        let st = self.add_string(&s)?;
-        self.dict.push(DictEntry{
-            st: st,
-            xt: defer_xt,
-            flags: DictEntry::DEFERRED,
-        });
-
+        self.add_word(&s, &[ Instr::Defer(self.invalid_deferred_xt), Instr::Unnest ], DictEntry::DEFERRED);
         Ok(())
     }
 
@@ -2548,7 +2538,7 @@ impl<'tf> ToyForth<'tf> {
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        self.add_word(&s, &[ Instr::Push(w), Instr::Unnest ])?;
+        self.add_word(&s, &[ Instr::Push(w), Instr::Unnest ], 0)?;
 
         Ok(())
     }
@@ -2567,7 +2557,7 @@ impl<'tf> ToyForth<'tf> {
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        self.add_word(&s, &[ Instr::Push(addr.to_word()), Instr::Unnest ])?;
+        self.add_word(&s, &[ Instr::Push(addr.to_word()), Instr::Unnest ], 0)?;
 
         Ok(())
     }
@@ -3859,7 +3849,7 @@ mod tests {
         entries[3] = Instr::BinaryOp(BinOp::Plus);
         entries[4] = Instr::Unnest;
 
-        forth.define_word("my_func", xt).unwrap();
+        forth.define_word("my_func", xt, 0).unwrap();
 
         let lookup_xt = forth.lookup_word("my_func").unwrap();
         assert_eq!(xt, lookup_xt);
@@ -4026,7 +4016,7 @@ mod tests {
            Instr::Push(Word::int(1)),
            Instr::BinaryOp(BinOp::Plus),
            Instr::Unnest,
-        ]).unwrap();
+        ], 0).unwrap();
 
         // look up various things
         forth.set_input("test");
@@ -4074,7 +4064,7 @@ mod tests {
            Instr::Push(Word::int(1)),
            Instr::BinaryOp(BinOp::Plus),
            Instr::Unnest,
-        ]).unwrap();
+        ], 0).unwrap();
 
         // look up various things
         forth.set_input("test");
@@ -4125,7 +4115,7 @@ mod tests {
            Instr::Push(Word::int(1)),
            Instr::BinaryOp(BinOp::Plus),
            Instr::Unnest,
-        ]).unwrap();
+        ], 0).unwrap();
 
         forth.push_int(1234).unwrap();
 
