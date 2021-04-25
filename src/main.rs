@@ -343,10 +343,6 @@ enum Instr {
     ReturnPop,
     ReturnCopy,
     Execute,
-    EOL,
-    Lookup,
-    DefStr,
-    DefWord,
     Func(u32),
     DoCol(XT),
     Exit,               // redundant with Unnest... but Unnest currently marks the end of a function
@@ -2120,16 +2116,6 @@ impl<'tf> ToyForth<'tf> {
         return Ok(());
     }
 
-    fn input_eol(&mut self) -> Result<(), ForthError> {
-        let ilen = self.input.len();
-        if ilen > Word::INT_MAX as usize {
-            return Err(ForthError::NumberOutOfRange);
-        }
-
-        self.push(Word::int(ilen as i32))?;
-        Ok(())
-    }
-
     fn builtin_find(&mut self) -> Result<(), ForthError> {
         let st = self.pop_str()?;
         let s = self.maybe_counted_string_at(st)?;
@@ -2360,36 +2346,6 @@ impl<'tf> ToyForth<'tf> {
                 Err(err)
             }
         }
-    }
-
-    fn defstr(&mut self) -> Result<(), ForthError> {
-        let i1 = self.pop_int()?;
-        let i0 = self.pop_int()?;
-
-        // TODO: bounds checks?
-        let s = &self.input[i0 as usize..i1 as usize];
-        match ToyForth::add_string_to_pool(&mut self.strings, s) {
-            Ok(st) => {
-                self.push(Word::from_str(st))?;
-                Ok(())
-            },
-            Err(err) => {
-                Err(err)
-            }
-        }
-    }
-
-    fn defword(&mut self) -> Result<(), ForthError> {
-        let xt = self.pop_xt()?;
-        let st = self.pop_str()?;
-
-        self.dict.push(DictEntry{
-            st: st,
-            xt: xt,
-            flags: 0,
-        });
-
-        Ok(())
     }
 
     fn pop_delim(&mut self) -> Result<u8, ForthError> {
@@ -3538,22 +3494,6 @@ impl<'tf> ToyForth<'tf> {
                     self.binary_op(op)?;
                     pc += 1;
                 },
-                Instr::EOL => {
-                    self.input_eol()?;
-                    pc += 1;
-                },
-                Instr::Lookup => {
-                    self.input_lookup()?;
-                    pc += 1;
-                },
-                Instr::DefStr => {
-                    self.defstr()?;
-                    pc += 1;
-                },
-                Instr::DefWord => {
-                    self.defword()?;
-                    pc += 1;
-                },
 
                 Instr::Func(x) => {
                     let ind = x as usize;
@@ -3792,80 +3732,6 @@ mod tests {
 
         let lookup_xt = forth.lookup_word("my_func").unwrap();
         assert_eq!(xt, lookup_xt);
-    }
-
-    #[test]
-    fn can_define_incrementally() {
-        let mut forth = ToyForth::new();
-
-        let xt = forth.mark_code();
-
-        /* f(x) = 2*x + 1 */
-        forth.add_instr(Instr::Push(Word::int(2)));
-        forth.add_instr(Instr::BinaryOp(BinOp::Star));
-        forth.add_instr(Instr::Push(Word::int(1)));
-        forth.add_instr(Instr::BinaryOp(BinOp::Plus));
-        forth.add_instr(Instr::Unnest);
-
-        forth.define_word("my_func", xt).unwrap();
-
-        let lookup_xt = forth.lookup_word("my_func").unwrap();
-        assert_eq!(xt, lookup_xt);
-
-        let immed = forth.mark_code();
-
-        forth.add_instr(Instr::Push(Word::int(0)));
-        forth.add_instr(Instr::EOL);
-        forth.add_instr(Instr::Lookup);
-        forth.add_instr(Instr::Bye);
-
-        forth.set_input("my_func");
-        forth.exec(immed).unwrap();
-
-        assert_eq!(forth.pop().unwrap(), Word::from_xt(xt));
-        assert_eq!(forth.pop(), None);
-    }
-
-    #[test]
-    fn can_define_word_from_input() {
-        let mut forth = ToyForth::new();
-
-        let xt = forth.mark_code();
-
-        /* f(x) = 2*x + 1 */
-        forth.add_instr(Instr::Push(Word::int(2)));
-        forth.add_instr(Instr::BinaryOp(BinOp::Star));
-        forth.add_instr(Instr::Push(Word::int(1)));
-        forth.add_instr(Instr::BinaryOp(BinOp::Plus));
-        forth.add_instr(Instr::Unnest);
-
-        forth.set_input("my_func");
-
-        {
-            let immed = forth.mark_code();
-            forth.add_instr(Instr::Push(Word::int(0)));
-            forth.add_instr(Instr::EOL);
-            forth.add_instr(Instr::DefStr);
-            forth.add_instr(Instr::Push(Word::from_xt(xt)));
-            forth.add_instr(Instr::DefWord);
-            forth.add_instr(Instr::Bye);
-
-            forth.exec(immed).unwrap();
-        }
-
-        {
-            let immed = forth.mark_code();
-
-            forth.add_instr(Instr::Push(Word::int(0)));
-            forth.add_instr(Instr::EOL);
-            forth.add_instr(Instr::Lookup);
-            forth.add_instr(Instr::Bye);
-
-            forth.exec(immed).unwrap();
-        }
-
-        assert_eq!(forth.pop().unwrap(), Word::from_xt(xt));
-        assert_eq!(forth.pop(), None);
     }
 
     #[test]
