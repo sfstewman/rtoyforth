@@ -337,7 +337,7 @@ enum Instr {
     ControlIndexDrop(u8),
     ControlIteration{incr:bool},
     ControlIndexPeek(u32),
-    Jump(XT),
+    Defer(XT),
     Error(u32),
     ReturnPush,
     ReturnPop,
@@ -1941,7 +1941,7 @@ impl<'tf> ToyForth<'tf> {
 
     fn builtin_defer(&mut self) -> Result<(), ForthError> {
         let defer_xt = self.mark_code();
-        self.add_instr(Instr::Jump(self.invalid_deferred_xt));
+        self.add_instr(Instr::Defer(self.invalid_deferred_xt));
         self.add_instr(Instr::Unnest);
 
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
@@ -1968,8 +1968,8 @@ impl<'tf> ToyForth<'tf> {
         }
 
         match self.code[code_ind] {
-            Instr::Jump(_) => {
-                self.code[code_ind] = Instr::Jump(xt);
+            Instr::Defer(_) => {
+                self.code[code_ind] = Instr::Defer(xt);
             },
             _ => {
                 return Err(ForthError::NotDeferredFunction);
@@ -1988,7 +1988,7 @@ impl<'tf> ToyForth<'tf> {
         }
 
         match self.code[code_ind] {
-            Instr::Jump(xt) => {
+            Instr::Defer(xt) => {
                 self.push(xt.to_word())?;
             },
             _ => {
@@ -3499,7 +3499,7 @@ impl<'tf> ToyForth<'tf> {
                     self.over()?;
                     pc += 1;
                 },
-                Instr::Jump(xt) => {
+                Instr::Defer(xt) => {
                     pc = xt.0;
                 },
                 Instr::Error(code) => {
