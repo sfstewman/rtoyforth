@@ -778,6 +778,10 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("CHAR+", ToyForth::builtin_char_plus);
         tf.add_func("PARSE", ToyForth::builtin_parse);
 
+        tf.add_func("ALLOT", ToyForth::builtin_allot);
+        tf.add_func("CELL+", ToyForth::builtin_cell_plus);
+        tf.add_func(",",     ToyForth::builtin_comma);
+
         tf.add_func("..", ToyForth::builtin_dot_dot);
         tf.add_func(":", ToyForth::builtin_colon);
         tf.add_func(":NONAME", ToyForth::builtin_colon_noname);
@@ -899,11 +903,23 @@ impl<'tf> ToyForth<'tf> {
 : 1- 1 - ;
 : 1+ 1 + ;
 
+: MAYBE-DISPLAY-ABORT ( x caddr u -- )
+    ROT ( x caddr u -- caddr u x )
+    0<> IF .\" Error: \" TYPE CR ABORT THEN
+    DROP DROP
+;
+
+: ABORT\" POSTPONE S\" POSTPONE MAYBE-DISPLAY-ABORT ; IMMEDIATE
+
 0    CONSTANT FALSE
 0 0= CONSTANT TRUE
 
 : DECIMAL 10 BASE ! ;
 : HEX     16 BASE ! ;
+
+: ALIGN   ; \\ data-space words are always aligned
+: ALIGNED DUP DROP ; \\ data-space words are always aligned
+: CELLS   0 + ; \\ cells are each one address unit wide
 
 : ABS DUP 0< IF NEGATE THEN ;
 
@@ -917,7 +933,13 @@ impl<'tf> ToyForth<'tf> {
 : SPACE BL EMIT ;
 : SPACES DUP 0> IF 1 DO SPACE LOOP THEN ; 
 
+: 2DROP ( n1 n2 -- ) DROP DROP ;
 : 2DUP ( n1 n2 -- n1 n2 n1 n2 ) OVER OVER ;
+: 2OVER ( n1 n2 n3 n4 -- n1 n2 n3 n4 n1 n2 ) 3 PICK 3 PICK ;
+: 2SWAP ( n1 n2 n3 n4 -- n3 n4 n1 n2 ) 3 ROLL 3 ROLL ;
+: 2>R ( n1 n2 -- ) ( R: -- n1 n2 ) SWAP >R >R ;
+: 2R> ( -- n1 n2 ) ( R: n1 n2 -- ) R> R> SWAP ;
+: 2R@ ( -- n1 n2 ) ( R: n1 n2 -- n1 n2 ) R> R> 2DUP >R >R SWAP ;
 
 : MIN ( n1 n1 -- n3 ) 2DUP > IF SWAP THEN DROP ;
 : MAX ( n1 n1 -- n3 ) 2DUP < IF SWAP THEN DROP ;
@@ -939,6 +961,9 @@ impl<'tf> ToyForth<'tf> {
 
 \\ Should this be a builtin?
 : ?DUP DUP 0<> IF DUP THEN ;
+
+\\ This should probably be a builtin so we can use memmove
+: MOVE >R SWAP R> 0 DO 2DUP @ SWAP ! CELL+ SWAP CELL+ SWAP LOOP 2DROP ;
 
 : COUNT-DIGITS 1 >R BEGIN 10 / DUP 0<> WHILE R> 1+ >R REPEAT DROP R> ;
 
@@ -1106,10 +1131,16 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn print_word_code(&self, word: &str) {
-        let xt = self.lookup_word(word).unwrap();
-        eprintln!("word: {}\ncode:", word);
-        self.print_code(xt);
-        eprintln!(".\n");
+        match self.lookup_word(word) {
+            Ok(xt) => {
+                eprintln!("word: {}\ncode:", word);
+                self.print_code(xt);
+                eprintln!(".\n");
+            }
+            Err(err) => {
+                eprintln!("error: {:?}", err);
+            }
+        };
     }
 
     pub fn print_stacks(&self, msg: &str) {
@@ -2108,6 +2139,39 @@ impl<'tf> ToyForth<'tf> {
             BinOp::Equal    => { self.push(Word::bool(aw.0 == bw.0))?; return Ok(()); },
             BinOp::NotEqual => { self.push(Word::bool(aw.0 != bw.0))?; return Ok(()); },
 
+            BinOp::UnsignedGreater => {
+                let gt = match (aw.kind(), bw.kind()) {
+                    (WordKind::Int(a), WordKind::Int(b)) => {
+                        Word::bool( (a as u32) > (b as u32) )
+                    },
+                    (WordKind::Addr(Addr(a)), WordKind::Addr(Addr(b))) => {
+                        Word::bool( (a as u32) > (b as u32) )
+                    },
+                    _ => {
+                        return Err(ForthError::InvalidArgument(aw));
+                    }
+                };
+
+                self.push(gt)?;
+                return Ok(());
+            },
+            BinOp::UnsignedLess => {
+                let lt = match (aw.kind(), bw.kind()) {
+                    (WordKind::Int(a), WordKind::Int(b)) => {
+                        Word::bool( (a as u32) < (b as u32) )
+                    },
+                    (WordKind::Addr(Addr(a)), WordKind::Addr(Addr(b))) => {
+                        Word::bool( (a as u32) < (b as u32) )
+                    },
+                    _ => {
+                        return Err(ForthError::InvalidArgument(aw));
+                    }
+                };
+
+                self.push(lt)?;
+                return Ok(());
+            },
+
             // otherwise handle below
             _ => {},
         }
@@ -2135,9 +2199,6 @@ impl<'tf> ToyForth<'tf> {
             BinOp::Greater  => { Word::bool(a > b ) },
             BinOp::Less     => { Word::bool(a < b ) },
 
-            BinOp::UnsignedGreater => { Word::bool( (a as u32) > (b as u32) ) },
-            BinOp::UnsignedLess    => { Word::bool( (a as u32) < (b as u32) ) },
-
             BinOp::LeftShift  => {
                 // TODO: check b for range
                 Word( ((a as u32) << (b as u32)) & Word::INT_MASK )
@@ -2147,7 +2208,9 @@ impl<'tf> ToyForth<'tf> {
                 Word( ((a as u32) >> (b as u32)) & Word::INT_MASK )
             },
 
-            BinOp::Equal | BinOp::NotEqual => { /* handled previously */ panic!("should not reach"); },
+            BinOp::Equal | BinOp::NotEqual | BinOp::UnsignedGreater | BinOp::UnsignedLess => {
+                /* handled previously */ panic!("should not reach");
+            },
         };
 
         self.push(result)?;
@@ -2423,6 +2486,35 @@ impl<'tf> ToyForth<'tf> {
         }
 
         (w0,w1,w2)
+    }
+
+    fn builtin_allot(&mut self) -> Result<(), ForthError> {
+        let n = self.pop_int()?;
+
+        if n < 0 {
+            return Err(ForthError::NumberOutOfRange);
+        }
+
+        self.vars.resize(self.vars.len() + (n as usize), Word(0));
+        Ok(())
+    }
+
+    fn builtin_cell_plus(&mut self) -> Result<(), ForthError> {
+        let addr = self.pop_addr()?;
+
+        if (addr.0 as usize) + 1 > self.vars.len() {
+            return Err(ForthError::VarSpaceOverflow);
+        }
+
+        self.push(Addr(addr.0+1).to_word())?;
+        Ok(())
+    }
+
+    fn builtin_comma(&mut self) -> Result<(), ForthError> {
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+
+        self.vars.push(w);
+        Ok(())
     }
 
     fn builtin_dot_dot(&mut self) -> Result<(), ForthError> {
@@ -5416,6 +5508,30 @@ ACTION-OF defer3
         assert_eq!(forth.pop_int().unwrap(), 999);
         assert_eq!(forth.cstack_depth(), 0);
         assert_eq!(forth.rstack_depth(), 0);
+    }
+
+    #[test]
+    fn memory_allocation() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+HERE 1 ALLOT HERE
+CONSTANT 2ND
+CONSTANT 1ST
+
+1ST 2ND U<
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::bool(true));
+
+        forth.interpret("1ST CELL+ 2ND =").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop().unwrap(), Word::bool(true));
+
+        forth.interpret("16 , 2ND @").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 16);
     }
 }
 
