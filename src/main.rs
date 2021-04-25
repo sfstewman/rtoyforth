@@ -493,6 +493,7 @@ enum ForthError {
     NoMatchingLoopHead,
 
     NotImplemented,
+    Abort,
 
     WordNotFound(ST),
 
@@ -542,21 +543,24 @@ impl ForthError {
     const DEFERRED_FUNCTION_NOT_SET         : u32 = 124;
     const NOT_DEFERRED_FUNCTION             : u32 = 125;
     const NO_MATCHING_LOOPHEAD              : u32 = 126;
-    const NOT_IMPLEMENTED                   : u32 = 127;
-    const WORD_NOT_FOUND                    : u32 = 128;
-    const INVALID_CELL                      : u32 = 129;
-    const INVALID_CONTROL_ENTRY             : u32 = 130;
-    const INVALID_INDEX                     : u32 = 131;
-    const INVALID_CONTROL_INSTRUCTION       : u32 = 132;
-    const INVALID_EXECUTION_TOKEN           : u32 = 133;
-    const INVALID_STRING                    : u32 = 134;
-    const INVALID_ESCAPE                    : u32 = 135;
-    const INVALID_CHAR                      : u32 = 136;
-    const INVALID_ADDRESS                   : u32 = 137;
-    const INVALID_COUNTED_STRING            : u32 = 138;
-    const INVALID_STRING_VALUE              : u32 = 139;
-    const INVALID_FUNCTION                  : u32 = 140;
-    const IO_ERROR                          : u32 = 141;
+    const ABORT                             : u32 = 127;
+    const NOT_IMPLEMENTED                   : u32 = 128;
+    const WORD_NOT_FOUND                    : u32 = 129;
+    const INVALID_CELL                      : u32 = 130;
+
+    const INVALID_CONTROL_ENTRY             : u32 = 131;
+    const INVALID_INDEX                     : u32 = 132;
+    const INVALID_CONTROL_INSTRUCTION       : u32 = 133;
+    const INVALID_EXECUTION_TOKEN           : u32 = 134;
+    const INVALID_STRING                    : u32 = 135;
+    const INVALID_ESCAPE                    : u32 = 136;
+    const INVALID_CHAR                      : u32 = 137;
+    const INVALID_ADDRESS                   : u32 = 138;
+    const INVALID_COUNTED_STRING            : u32 = 139;
+    const INVALID_STRING_VALUE              : u32 = 140;
+
+    const INVALID_FUNCTION                  : u32 = 141;
+    const IO_ERROR                          : u32 = 142;
 
     fn from_code(code: u32) -> ForthError {
         match code {
@@ -592,6 +596,8 @@ impl ForthError {
             ForthError::NOT_DEFERRED_FUNCTION           => ForthError::NotDeferredFunction,
 
             ForthError::NO_MATCHING_LOOPHEAD            => ForthError::NoMatchingLoopHead,
+
+            ForthError::ABORT                           => ForthError::Abort,
 
             ForthError::NOT_IMPLEMENTED                 => ForthError::NotImplemented,
 
@@ -640,6 +646,8 @@ impl ForthError {
             ForthError::NoMatchingLoopHead			    => ForthError::NO_MATCHING_LOOPHEAD,
 
             ForthError::NotImplemented                  => ForthError::NOT_IMPLEMENTED,
+
+            ForthError::Abort                           => ForthError::ABORT,
 
             // some of these errors should produce an argument
             ForthError::InvalidArgument(_)              => ForthError::INVALID_ARGUMENT,
@@ -759,6 +767,8 @@ impl<'tf> ToyForth<'tf> {
         let (emit,_) = tf.add_func("EMIT", ToyForth::builtin_emit);
 
         tf.add_instr_func = tf.add_anon_func(ToyForth::builtin_add_instr).unwrap() as u32;
+
+        tf.add_func("ABORT", ToyForth::builtin_abort);
 
         // words that may be replaced with Forth definitions at some point
         tf.add_prim("BL", Instr::Push(Word::int(' ' as i32)));
@@ -1221,10 +1231,28 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    pub fn clear_stacks(&mut self) {
+        self.dstack.clear();
+        self.rstack.clear();
+        self.cstack.clear();
+
+        // reset any definitions, enter compilation state
+        self.set_var_at(ToyForth::ADDR_STATE,      Word::int(0)).unwrap();
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0)).unwrap();
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT,  Word(0)).unwrap();
+    }
+
+    pub fn builtin_abort(&mut self) -> Result<(), ForthError> {
+        Err(ForthError::Abort)
+    }
+
     pub fn builtin_interpret(&mut self) -> Result<(), ForthError> {
         let ret = self.inner_interpret();
+
         if let Err(err) = &ret {
             match err {
+                ForthError::Abort => {},
+
                 ForthError::WordNotFound(st) => {
                     if let Ok(s) = self.maybe_string_at(*st) {
                         eprintln!("Word not found: {}", s);
@@ -1232,6 +1260,9 @@ impl<'tf> ToyForth<'tf> {
                         let b = self.bytes_at(*st);
                         eprintln!("Word not found (bytes): {:?}", b);
                     }
+                },
+                ForthError::InvalidArgument(w) => {
+                    eprintln!("Invalid argument: {}", w);
                 },
                 ForthError::InvalidCell(xt) => {
                     eprintln!("Invalid cell at xt = {}", xt.0);
@@ -1280,15 +1311,23 @@ impl<'tf> ToyForth<'tf> {
                 }
             }
 
-            eprintln!("Input: {}", self.input);
-            // FIXME: correctly handle utf-8 input...
-            let pfx = format!("{:>width$}", "^", width=self.last_input_off+1);
-            let sfx = if self.input_off > self.last_input_off {
-                format!("{:->width$}", "^", width=self.input_off-self.last_input_off)
+            if let ForthError::Abort = err {
             } else {
-                "".to_string()
-            };
-            eprintln!("       {}{}", pfx,sfx);
+                eprintln!("Input: {}", self.input);
+                // FIXME: correctly handle utf-8 input...
+                let pfx = format!("{:>width$}", "^", width=self.last_input_off+1);
+                let sfx = if self.input_off > self.last_input_off {
+                    format!("{:->width$}", "^", width=self.input_off-self.last_input_off)
+                } else {
+                    "".to_string()
+                };
+                eprintln!("       {}{}", pfx,sfx);
+
+                self.print_stacks("--[ STACKS ]--");
+                // TODO: backtrace the stacks
+            }
+
+            self.clear_stacks();
         }
 
         ret
