@@ -526,19 +526,20 @@ impl ForthError {
     const DIVISION_BY_ZERO                  : u32 = 106;
     const INVALID_NUMBER_BASE               : u32 = 107;
     const NUMBER_OUT_OF_RANGE               : u32 = 108;
-    const INVALID_EMPTY_STRING              : u32 = 119;
+    const INVALID_EMPTY_STRING              : u32 = 109;
     const STRING_TOO_LONG                   : u32 = 110;
+
     const STRING_OFFSET_TOO_LARGE           : u32 = 111;
     const STRING_NOT_FOUND                  : u32 = 112;
     const INVALID_HEX_ESCAPE                : u32 = 113;
     const STRING_NOT_TERMINATED             : u32 = 114;
-
     const FUNCTION_SPACE_OVERFLOW           : u32 = 115;
     const DICT_SPACE_OVERFLOW               : u32 = 116;
     const VAR_SPACE_OVERFLOW                : u32 = 117;
     const STRING_SPACE_OVERFLOW             : u32 = 118;
     const WORD_INVALID_WHILE_COMPILING      : u32 = 119;
     const WORD_INVALID_WHILE_INTERPRETING   : u32 = 120;
+
     const DEFINING_WORD_INVALID             : u32 = 121;
     const UNFINISHED_COLON_DEFINITION       : u32 = 122;
     const DICT_EMPTY                        : u32 = 123;
@@ -3068,10 +3069,7 @@ impl<'tf> ToyForth<'tf> {
     pub fn builtin_c_quote(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
-        // grab current location
-        let ind = self.strings.len();
-
-        let (st,len) = self.add_string_to_quote(true)?;
+        let (st,_) = self.add_string_to_quote(true)?;
 
         self.add_instr(Instr::Push(st.to_word()));
         Ok(())
@@ -3131,7 +3129,6 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn builtin_s_backslash_quote(&mut self) -> Result<(),ForthError> {
-        let off0 = self.input_off;
         let bytes = &self.input.as_bytes();
 
         // TODO: on error, truncate self.strings to str_off
@@ -3512,7 +3509,7 @@ impl<'tf> ToyForth<'tf> {
                     };
 
                     self.cstack[clen-1] = ControlEntry::Index(next);
-                    self.push(Word::bool(next == top));
+                    self.push(Word::bool(next == top))?;
 
                     pc += 1;
                 },
@@ -4884,7 +4881,7 @@ BAR
     LOOP
 ;").unwrap();
 
-        forth.stdout_interpret("1 10 TEST");
+        forth.stdout_interpret("1 10 TEST").unwrap();
         // iteration        value
         // start            1
         // 1                3
@@ -4901,8 +4898,6 @@ BAR
     #[test]
     fn qdo_loop() {
         let mut forth = ToyForth::new();
-
-        let stdout = std::io::stdout();
 
         forth.interpret("\
 VARIABLE iter
