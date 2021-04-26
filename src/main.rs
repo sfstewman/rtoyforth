@@ -448,9 +448,9 @@ struct ToyForth<'tf> {
     strings: std::vec::Vec<u8>,
     code: Vec<Instr>,
 
-    add_instr_func: u32,
     runtime_does_func: u32,
     invalid_deferred_xt: XT,
+    compile_comma_xt: XT,
 
     pad:  [u8;256],
     word: [u8;256],
@@ -721,9 +721,9 @@ impl<'tf> ToyForth<'tf> {
             strings: std::vec::Vec::new(),
             code:    std::vec::Vec::new(),
 
-            add_instr_func: u32::MAX,
             runtime_does_func: u32::MAX,
             invalid_deferred_xt: XT(0),
+            compile_comma_xt: XT(0),
 
             pad:     [0;256],
             word:    [0;256],
@@ -780,7 +780,9 @@ impl<'tf> ToyForth<'tf> {
 
         let (emit,_) = tf.add_func("EMIT", ToyForth::builtin_emit);
 
-        tf.add_instr_func = tf.add_anon_func(ToyForth::builtin_add_instr).unwrap() as u32;
+        let (_,compile_comma_xt) = tf.add_immed("COMPILE,", ToyForth::builtin_add_instr);
+
+        tf.compile_comma_xt = compile_comma_xt;
         tf.runtime_does_func = tf.add_anon_func(ToyForth::builtin_runtime_does).unwrap() as u32;
 
         tf.add_func("ABORT", ToyForth::builtin_abort);
@@ -2437,7 +2439,7 @@ impl<'tf> ToyForth<'tf> {
             self.add_instr(Instr::DoCol(ent.xt));
         } else {
             self.add_instr(Instr::Push(ent.xt.to_word()));
-            self.add_instr(Instr::Func(self.add_instr_func));
+            self.add_instr(Instr::DoCol(self.compile_comma_xt));
         }
 
         Ok(())
