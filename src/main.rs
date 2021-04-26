@@ -999,6 +999,30 @@ impl<'tf> ToyForth<'tf> {
     ..          ( n1 -- )
 ;
 
+\\ consider moving VALUE/TO into builtins?  This would make the words
+\\ they use safer, but adds more builtins.
+: VALUE CREATE , DOES> @ ;
+
+\\ : TO
+\\     STATE @ IF
+\\         \\ compiling
+\\         POSTPONE ' >BODY POSTPONE !
+\\     ELSE
+\\         \\ interpreting
+\\         ' >BODY !
+\\     THEN
+\\ ; IMMEDIATE
+
+: TO
+    ' >BODY
+    STATE @ IF
+        POSTPONE LITERAL
+        POSTPONE !
+    ELSE
+        !
+    THEN
+; IMMEDIATE
+
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
@@ -5699,6 +5723,71 @@ C23
         forth.interpret("' FOO >BODY 1ST =").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), -1);
+    }
+
+    #[test]
+    fn value_and_to() {
+        let mut forth = ToyForth::new();
+
+        // from https://forth-standard.org/standard/testsuite#test:core:VALUE
+
+        forth.interpret("\
+ 111 VALUE v1
+-999 VALUE v2").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("v1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 111);
+
+        forth.interpret("v2").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), -999);
+
+        forth.interpret("222 to v1").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("v1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 222);
+
+        forth.interpret(": vd1 v1 ;").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("vd1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 222);
+
+        forth.interpret("\
+212 TO v1
+vd1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 212);
+
+        forth.print_word_code("TO");
+
+        forth.interpret(": vd2 TO v2 ; /STACKS").unwrap();
+        forth.print_word_code("vd2");
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("v2").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), -999);
+
+        forth.interpret("-333 vd2").unwrap();
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("v2").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), -333);
+
+        forth.interpret("v1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 212);
+
+        forth.interpret("vd1").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 212);
     }
 }
 
