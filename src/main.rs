@@ -1141,6 +1141,10 @@ impl<'tf> ToyForth<'tf> {
             if let Instr::Unnest = *instr {
                 break
             }
+
+            if let Instr::Jump(_) = *instr {
+                break
+            }
         }
     }
 
