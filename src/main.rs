@@ -343,6 +343,7 @@ enum Instr {
     ControlIteration{incr:bool},
     ControlIndexPeek(u32),
     Defer(XT),
+    Jump(XT),
     Error(u32),
     ReturnPush,
     ReturnPop,
@@ -448,6 +449,7 @@ struct ToyForth<'tf> {
     code: Vec<Instr>,
 
     add_instr_func: u32,
+    runtime_does_func: u32,
     invalid_deferred_xt: XT,
 
     pad:  [u8;256],
@@ -716,6 +718,7 @@ impl<'tf> ToyForth<'tf> {
             code:    std::vec::Vec::new(),
 
             add_instr_func: u32::MAX,
+            runtime_does_func: u32::MAX,
             invalid_deferred_xt: XT(0),
 
             pad:     [0;256],
@@ -774,6 +777,7 @@ impl<'tf> ToyForth<'tf> {
         let (emit,_) = tf.add_func("EMIT", ToyForth::builtin_emit);
 
         tf.add_instr_func = tf.add_anon_func(ToyForth::builtin_add_instr).unwrap() as u32;
+        tf.runtime_does_func = tf.add_anon_func(ToyForth::builtin_runtime_does).unwrap() as u32;
 
         tf.add_func("ABORT", ToyForth::builtin_abort);
 
@@ -870,6 +874,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("IS", ToyForth::builtin_is);
 
         tf.add_func("CREATE", ToyForth::builtin_create);
+        tf.add_immed("DOES>", ToyForth::builtin_does);
 
         // debugging
         tf.add_func("/STACKS", ToyForth::builtin_at_stacks);
@@ -2573,6 +2578,47 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn builtin_runtime_does(&mut self) -> Result<(), ForthError> {
+        let jump_xt = self.pop_xt()?;
+
+        // look up last definition
+        let entry = self.dict.last().ok_or(ForthError::DictEmpty)?;
+
+        // find Unnest or Jump at the end, and change Unnest to Jump(jump_xt),
+        //     or Jump to Jump(jump_xt)
+        //
+        // TODO: change dictionary entries to have the number of instructions
+        //       to make this safer
+        let i0 = entry.xt.0 as usize;
+        for i in i0..self.code.len() {
+            match self.code[i] {
+                Instr::Unnest | Instr::Jump(_) => {
+                    self.code[i] = Instr::Jump(jump_xt);
+                    break
+                },
+                _ => {},
+            };
+        }
+
+        Ok(())
+    }
+
+    fn builtin_does(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;  // see gforth's interpration semantics?
+
+        // add dummy push and call to runtime DOES>
+        let xt = self.mark_code();
+        self.add_instr(Instr::Push(Word(0)));
+        self.add_instr(Instr::Func(self.runtime_does_func));
+        self.add_instr(Instr::Unnest);
+
+        // now fix up push with XT after the call to runtime DOES>
+        let after_xt = self.mark_code();
+        self.code[xt.0 as usize] = Instr::Push(after_xt.to_word());
+
+        Ok(())
+    }
+
     fn builtin_constant(&mut self) -> Result<(), ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
@@ -3543,7 +3589,7 @@ impl<'tf> ToyForth<'tf> {
                     self.over()?;
                     pc += 1;
                 },
-                Instr::Defer(xt) => {
+                Instr::Defer(xt) | Instr::Jump(xt) => {
                     pc = xt.0;
                 },
                 Instr::Error(code) => {
@@ -5579,7 +5625,7 @@ CONSTANT 1ST
     }
 
     #[test]
-    fn create() {
+    fn create_and_does() {
         let mut forth = ToyForth::new();
 
         forth.interpret("\
@@ -5600,6 +5646,21 @@ FOO @               \\ access values via FOO and 1ST
         assert_eq!(forth.pop_int().unwrap(), 17);
         assert_eq!(forth.pop_int().unwrap(), 17);
         assert_eq!(forth.pop_int().unwrap(), -1);
+
+        forth.interpret("\
+: MYCONST CREATE , DOES> @ ;
+").unwrap();
+
+        forth.print_word_code("MYCONST");
+
+        assert_eq!(forth.stack_depth(), 0);
+
+        forth.interpret("23 MYCONST C23
+C23
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 23);
     }
 }
 
