@@ -1974,7 +1974,7 @@ impl<'tf> ToyForth<'tf> {
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
 
-        self.add_word(&s, &[ Instr::Defer(self.invalid_deferred_xt), Instr::Unnest ], DictEntry::DEFERRED);
+        self.add_word(&s, &[ Instr::Defer(self.invalid_deferred_xt), Instr::Unnest ], DictEntry::DEFERRED)?;
         Ok(())
     }
 
@@ -2568,7 +2568,7 @@ impl<'tf> ToyForth<'tf> {
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        self.add_word(&s, &[ Instr::Push(addr.to_word()), Instr::Unnest ], 0);
+        self.add_word(&s, &[ Instr::Push(addr.to_word()), Instr::Unnest ], 0)?;
 
         Ok(())
     }
