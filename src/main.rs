@@ -518,6 +518,7 @@ enum ForthError {
     InvalidCountedString(ST),
     InvalidStringValue(u32),
     InvalidFunction(u32),
+    InvalidPC(u32),
 
     IOError(std::io::Error),
 }
@@ -568,7 +569,8 @@ impl ForthError {
     const INVALID_STRING_VALUE              : u32 = 140;
 
     const INVALID_FUNCTION                  : u32 = 141;
-    const IO_ERROR                          : u32 = 142;
+    const INVALID_PC                        : u32 = 142;
+    const IO_ERROR                          : u32 = 143;
 
     fn from_code(code: u32) -> ForthError {
         match code {
@@ -672,6 +674,8 @@ impl ForthError {
             ForthError::InvalidCountedString(_)			=> ForthError::INVALID_COUNTED_STRING,
             ForthError::InvalidStringValue(_)			=> ForthError::INVALID_STRING_VALUE,
             ForthError::InvalidFunction(_)				=> ForthError::INVALID_FUNCTION,
+            ForthError::InvalidPC(_)				    => ForthError::INVALID_PC,
+
             ForthError::IOError(_)			            => ForthError::IO_ERROR,
         }
     }
@@ -3550,7 +3554,11 @@ impl<'tf> ToyForth<'tf> {
         let mut pc = xt.0;
 
         loop {
+            if pc as usize >= self.code.len() {
+                return Err(ForthError::InvalidPC(pc));
+            }
             let op = self.code[pc as usize];
+
             // eprintln!("pc = {}, code[pc] = {:?}", pc, op);
             match op {
                 Instr::Empty => {
