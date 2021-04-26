@@ -879,6 +879,7 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func("CREATE", ToyForth::builtin_create);
         tf.add_immed("DOES>", ToyForth::builtin_does);
+        tf.add_func(">BODY", ToyForth::builtin_body);
 
         // debugging
         tf.add_func("/STACKS", ToyForth::builtin_at_stacks);
@@ -2625,6 +2626,23 @@ impl<'tf> ToyForth<'tf> {
         self.code[xt.0 as usize] = Instr::Push(after_xt.to_word());
 
         Ok(())
+    }
+
+    fn builtin_body(&mut self) -> Result<(), ForthError> {
+        let xt = self.pop_xt()?;
+
+        let addr = xt.0 as usize;
+        if addr >= self.code.len() {
+            return Err(ForthError::InvalidPC(xt.0));
+        }
+
+        if let Instr::Push(w) = self.code[addr] {
+            let addr = w.to_addr().ok_or(ForthError::InvalidCell(xt))?;
+            self.push(addr.to_word())?;
+            return Ok(());
+        } else {
+            return Err(ForthError::InvalidCell(xt));
+        }
     }
 
     fn builtin_constant(&mut self) -> Result<(), ForthError> {
@@ -5637,7 +5655,7 @@ CONSTANT 1ST
     }
 
     #[test]
-    fn create_and_does() {
+    fn create_does_and_body() {
         let mut forth = ToyForth::new();
 
         forth.interpret("\
@@ -5673,6 +5691,12 @@ C23
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 23);
+
+        forth.print_word_code("FOO");
+
+        forth.interpret("' FOO >BODY 1ST =").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), -1);
     }
 }
 
