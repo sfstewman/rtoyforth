@@ -133,6 +133,11 @@ impl ST {
         }
     }
 
+    fn null() -> ST {
+        // offset == 0, length == 0
+        ST::Allocated(0)
+    }
+
     fn allocated_space(off: u32, len: u8) -> ST {
         // TODO: check for overflow
         ST::Allocated((off<<8) | (len as u32))
@@ -451,6 +456,7 @@ struct ToyForth<'tf> {
     input: String,
     input_off: usize,
     last_input_off: usize,
+    last_word: ST,
 
     // in_stream: Option<Rc<RefCell<(dyn std::io::BufRead)>>>,
     in_stream: Option<Rc<RefCell<(dyn LineReader)>>>,
@@ -718,6 +724,7 @@ impl<'tf> ToyForth<'tf> {
             input: std::string::String::new(),
             input_off: 0,
             last_input_off: 0,
+            last_word: ST::null(),
 
             in_stream: None,
             out_stream: None,
@@ -1147,6 +1154,10 @@ impl<'tf> ToyForth<'tf> {
 
     pub fn print_stacks(&self, msg: &str) {
         eprintln!(">>> {}: ",msg);
+        eprintln!("\nData:");
+        if self.dstack.len() == 0 {
+            eprintln!("<empty>");
+        }
         for (i,w) in self.dstack.iter().enumerate() {
             let k = w.kind();
             if let WordKind::Str(st) = k {
@@ -1159,14 +1170,20 @@ impl<'tf> ToyForth<'tf> {
                     eprintln!("[D {:3}] invalid ST {}", i, st.descr());
                 }
             } else {
-                eprintln!("[D {:3}] {:?}", i,w.kind());
+                eprintln!("[D {:3}] {}", i,w);
             }
         }
-        for (i,w) in self.rstack.iter().enumerate() {
-            eprintln!("[R {:3}] {:?}", i,w);
+        if self.rstack.len() > 0 {
+            eprintln!("\nReturn:");
+            for (i,w) in self.rstack.iter().enumerate() {
+                eprintln!("[R {:3}] {}", i,w);
+            }
         }
-        for (i,itm) in self.cstack.iter().enumerate() {
-            eprintln!("[C {:3}] {:?}", i, itm);
+        if self.cstack.len() > 0 {
+            eprintln!("\nControl");
+            for (i,itm) in self.cstack.iter().enumerate() {
+                eprintln!("[C {:3}] {:?}", i, itm);
+            }
         }
         eprintln!("done\n");
     }
@@ -1347,6 +1364,17 @@ impl<'tf> ToyForth<'tf> {
             if let ForthError::Abort = err {
             } else {
                 eprintln!("Input: {}", self.input);
+
+                if let ST::InputSpace(ScratchLoc{len,off}) = self.last_word {
+                    let pfx = format!("{:>width$}", "^", width=(off as usize)+1);
+                    let sfx = if len > 0 {
+                        format!("{:->width$}", "^", width=(len as usize))
+                    } else {
+                        "".to_string()
+                    };
+                    eprintln!("Word:  {}{}", pfx,sfx);
+                }
+
                 // FIXME: correctly handle utf-8 input...
                 let pfx = format!("{:>width$}", "^", width=self.last_input_off+1);
                 let sfx = if self.input_off > self.last_input_off {
@@ -1354,7 +1382,7 @@ impl<'tf> ToyForth<'tf> {
                 } else {
                     "".to_string()
                 };
-                eprintln!("       {}{}", pfx,sfx);
+                eprintln!("Parsed:{}{}", pfx,sfx);
 
                 self.print_stacks("--[ STACKS ]--");
                 // TODO: backtrace the stacks
@@ -1370,6 +1398,10 @@ impl<'tf> ToyForth<'tf> {
         loop {
             self.push_int(' ' as i32)?;
             self.builtin_parse()?;
+            self.swap()?;
+            self.last_word = self.pop_str()?;
+            self.push(self.last_word.to_word())?;
+            self.swap()?;
             self.builtin_find_name()?;
 
             let is_compiling = self.compiling();
