@@ -705,9 +705,7 @@ impl<'tf> ToyForth<'tf> {
     const ADDR_SLASH_BRACKET:  Addr = Addr(4);
 
     // special variables
-    const ADDR_HERE   : Addr = Addr(Addr::BUILTIN | 0);
-    const ADDR_UNUSED : Addr = Addr(Addr::BUILTIN | 1);
-    const ADDR_IN     : Addr = Addr(Addr::BUILTIN | 2);
+    const ADDR_IN     : Addr = Addr(Addr::BUILTIN | 0);
 
     pub fn new() -> ToyForth<'tf> {
         let mut tf = ToyForth{
