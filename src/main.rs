@@ -47,7 +47,7 @@ enum ST {
     PadSpace(ScratchLoc),
     WordSpace(ScratchLoc),
     InputSpace(ScratchLoc),
-    // Pic(ScratchLoc),
+    PicSpace(ScratchLoc),
 }
 
 impl ST {
@@ -83,6 +83,7 @@ impl ST {
             0 => Ok(ST::pad_space((val & ST::OFF_MASK) as u8, ((val & ST::LEN_MASK) >> 8) as u8)),
             1 => Ok(ST::word_space((val & ST::OFF_MASK) as u8, ((val & ST::LEN_MASK) >> 8) as u8)),
             2 => Ok(ST::input_space((val & ST::OFF_MASK) as u8, ((val & ST::LEN_MASK) >> 8) as u8)),
+            3 => Ok(ST::pic_space((val & ST::OFF_MASK) as u8, ((val & ST::LEN_MASK) >> 8) as u8)),
             _ => Err(ForthError::InvalidStringValue(val)),
         }
     }
@@ -92,7 +93,7 @@ impl ST {
             ST::Allocated(val) => {
                 val >> 8
             },
-            ST::PadSpace(loc) | ST::WordSpace(loc) | ST::InputSpace(loc) => {
+            ST::PadSpace(loc) | ST::WordSpace(loc) | ST::InputSpace(loc) | ST::PicSpace(loc) => {
                 loc.off as u32
             },
         }
@@ -103,7 +104,7 @@ impl ST {
             ST::Allocated(val) => {
                 val & 0xff
             },
-            ST::PadSpace(loc) | ST::WordSpace(loc) | ST::InputSpace(loc) => {
+            ST::PadSpace(loc) | ST::WordSpace(loc) | ST::InputSpace(loc) | ST::PicSpace(loc) => {
                 loc.len as u32
             },
         }
@@ -130,6 +131,9 @@ impl ST {
             ST::InputSpace(_) => {
                 ST::input_space(new_addr as u8, new_len)
             },
+            ST::PicSpace(_) => {
+                ST::pic_space(new_addr as u8, new_len)
+            },
         }
     }
 
@@ -155,6 +159,10 @@ impl ST {
         ST::InputSpace(ScratchLoc{off:off, len:len})
     }
 
+    fn pic_space(off: u8, len: u8) -> ST {
+        ST::PicSpace(ScratchLoc{off:off, len:len})
+    }
+
     fn to_word(self) -> Word {
         let v : u32 = match self {
             ST::Allocated(off) => {
@@ -172,6 +180,9 @@ impl ST {
             },
             ST::InputSpace(loc) => {
                 ST::SCRATCH_BIT | ((2 as u32) << 16) | ((loc.len as u32) << 8) | (loc.off as u32)
+            },
+            ST::PicSpace(loc) => {
+                ST::SCRATCH_BIT | ((3 as u32) << 16) | ((loc.len as u32) << 8) | (loc.off as u32)
             },
         };
 
@@ -192,6 +203,9 @@ impl ST {
             },
             ST::InputSpace(loc) => {
                 format!("[st {}] input[off={}, len={}]", w.0, loc.off, loc.len)
+            },
+            ST::PicSpace(loc) => {
+                format!("[st {}] pic[off={}, len={}]", w.0, loc.off, loc.len)
             },
         }
     }
@@ -302,9 +316,10 @@ impl std::fmt::Display for Word {
                 match st {
                     ST::Allocated(v) => {
                         formatter.write_fmt(format_args!("[str:alloc] @ {} len={},addr={}", v, st.len(), st.addr())) },
-                    ST::PadSpace(loc)  => { formatter.write_fmt(format_args!("[str:pad] len={},off={}", loc.len, loc.off)) },
-                    ST::WordSpace(loc) => { formatter.write_fmt(format_args!("[str:word] len={},off={}", loc.len, loc.off)) },
+                    ST::PadSpace(loc)   => { formatter.write_fmt(format_args!("[str:pad] len={},off={}", loc.len, loc.off)) },
+                    ST::WordSpace(loc)  => { formatter.write_fmt(format_args!("[str:word] len={},off={}", loc.len, loc.off)) },
                     ST::InputSpace(loc) => { formatter.write_fmt(format_args!("[str:input] len={},off={}", loc.len, loc.off)) },
+                    ST::PicSpace(loc)   => { formatter.write_fmt(format_args!("[str:pic] len={},off={}", loc.len, loc.off)) },
                 }
             },
         }
@@ -454,6 +469,7 @@ struct ToyForth<'tf> {
 
     pad:  [u8;256],
     word: [u8;256],
+    pic:  [u8;256],
 
     input: String,
     input_off: usize,
@@ -725,6 +741,7 @@ impl<'tf> ToyForth<'tf> {
 
             pad:     [0;256],
             word:    [0;256],
+            pic:     [0;256],
 
             input: std::string::String::new(),
             input_off: 0,
@@ -796,6 +813,10 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("ALLOT", ToyForth::builtin_allot);
         tf.add_func("CELL+", ToyForth::builtin_cell_plus);
         tf.add_func(",",     ToyForth::builtin_comma);
+
+        tf.add_func("PIC", ToyForth::builtin_pic);
+
+        tf.add_func("PAD", ToyForth::builtin_pad);
 
         tf.add_func("..", ToyForth::builtin_dot_dot);
         tf.add_func(":", ToyForth::builtin_colon);
@@ -1930,6 +1951,16 @@ impl<'tf> ToyForth<'tf> {
 
                 Ok(&self.input[i0..i1].as_bytes())
             },
+            ST::PicSpace(loc) => {
+                let i0 = loc.off as usize;
+                let i1 = (loc.off + loc.len) as usize;
+
+                if i0 >= self.word.len() || i1 > self.word.len() {
+                    return Err(ForthError::InvalidString(st));
+                }
+
+                Ok(&self.pic[i0..i1])
+            },
         }
     }
 
@@ -2626,6 +2657,16 @@ impl<'tf> ToyForth<'tf> {
             wr.flush()?;
         }
 
+        Ok(())
+    }
+
+    fn builtin_pic(&mut self) -> Result<(), ForthError> {
+        self.push_str(ST::pic_space(0,std::cmp::min(u8::MAX as usize, self.pic.len()) as u8));
+        Ok(())
+    }
+
+    fn builtin_pad(&mut self) -> Result<(), ForthError> {
+        self.push_str(ST::pad_space(0,std::cmp::min(u8::MAX as usize, self.pad.len()) as u8));
         Ok(())
     }
 
