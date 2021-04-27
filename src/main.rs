@@ -19,20 +19,20 @@ impl XT {
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
-struct Addr(u32);
+struct VarAddr(u32);
 
-impl Addr {
+impl VarAddr {
     const BUILTIN : u32 = 0x1000_0000;
 
     const MAX : u32 = 0x1fff_ffff;
     const MIN : u32 = 0;
     const MASK : u32 = 0x1fff_ffff;
     const ADDR_BIT : u32 = 0x2000_0000;
-    const BITS : u32 = Word::HIGH_BIT | Word::SIGN_BIT | Addr::ADDR_BIT;
+    const BITS : u32 = Word::HIGH_BIT | Word::SIGN_BIT | VarAddr::ADDR_BIT;
 
     fn to_word(self) -> Word {
         // XXX: check mask
-        Word(Addr::BITS | self.0)
+        Word(VarAddr::BITS | self.0)
     }
 }
 
@@ -202,7 +202,7 @@ enum WordKind {
     Int(i32),
     XT(XT),
     Str(ST),
-    Addr(Addr),
+    VarAddr(VarAddr),
 }
 
 impl Word {
@@ -246,7 +246,7 @@ impl Word {
     }
 
     fn addr(x: u32) -> Word {
-        Addr(x).to_word()
+        VarAddr(x).to_word()
     }
 
     pub fn from_xt(xt: XT) -> Word {
@@ -257,7 +257,7 @@ impl Word {
         st.to_word()
     }
 
-    pub fn from_addr(addr: Addr) -> Word {
+    pub fn from_addr(addr: VarAddr) -> Word {
         addr.to_word()
     }
 
@@ -268,8 +268,8 @@ impl Word {
                 // FIXME: unwrap!
                 WordKind::Str(ST::from_u32(x).unwrap())
             },
-            x if (x & Addr::ADDR_BIT) != 0 => {
-                WordKind::Addr(Addr(x & Addr::MASK))
+            x if (x & VarAddr::ADDR_BIT) != 0 => {
+                WordKind::VarAddr(VarAddr(x & VarAddr::MASK))
             }
             x => { WordKind::XT(XT(x & Word::XT_MASK)) },
         }
@@ -287,8 +287,8 @@ impl Word {
         if let WordKind::Str(x) = self.kind() { Some(x) } else { None }
     }
 
-    pub fn to_addr(self) -> Option<Addr> {
-        if let WordKind::Addr(x) = self.kind() { Some(x) } else { None }
+    pub fn to_addr(self) -> Option<VarAddr> {
+        if let WordKind::VarAddr(x) = self.kind() { Some(x) } else { None }
     }
 }
 
@@ -297,7 +297,7 @@ impl std::fmt::Display for Word {
         match self.kind() {
             WordKind::Int(x) => { formatter.write_fmt(format_args!("[int] {}", x)) },
             WordKind::XT(XT(x))  => { formatter.write_fmt(format_args!("[xt] {}", x)) },
-            WordKind::Addr(Addr(x))  => { formatter.write_fmt(format_args!("[addr] {}", x)) },
+            WordKind::VarAddr(VarAddr(x))  => { formatter.write_fmt(format_args!("[addr] {}", x)) },
             WordKind::Str(st) => {
                 match st {
                     ST::Allocated(v) => {
@@ -514,7 +514,7 @@ enum ForthError {
     InvalidString(ST),
     InvalidEscape(char),
     InvalidChar(i32),
-    InvalidAddress(Addr),
+    InvalidAddress(VarAddr),
     InvalidCountedString(ST),
     InvalidStringValue(u32),
     InvalidFunction(u32),
@@ -698,14 +698,14 @@ impl LineReader for std::io::Stdin {
 }
 
 impl<'tf> ToyForth<'tf> {
-    const ADDR_STATE:      Addr = Addr(0);
-    const ADDR_BASE:       Addr = Addr(1);
-    const ADDR_SLASH_CDEF: Addr = Addr(2);
-    const ADDR_SLASH_CXT:  Addr = Addr(3);
-    const ADDR_SLASH_BRACKET:  Addr = Addr(4);
+    const ADDR_STATE:      VarAddr = VarAddr(0);
+    const ADDR_BASE:       VarAddr = VarAddr(1);
+    const ADDR_SLASH_CDEF: VarAddr = VarAddr(2);
+    const ADDR_SLASH_CXT:  VarAddr = VarAddr(3);
+    const ADDR_SLASH_BRACKET:  VarAddr = VarAddr(4);
 
     // special variables
-    const ADDR_IN     : Addr = Addr(Addr::BUILTIN | 0);
+    const ADDR_IN     : VarAddr = VarAddr(VarAddr::BUILTIN | 0);
 
     pub fn new() -> ToyForth<'tf> {
         let mut tf = ToyForth{
@@ -2153,19 +2153,19 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    fn new_var(&mut self, initial_value: Word) -> Result<Addr, ForthError> {
+    fn new_var(&mut self, initial_value: Word) -> Result<VarAddr, ForthError> {
         let addr = self.vars.len();
 
-        if addr > (Addr::MAX as usize) {
+        if addr > (VarAddr::MAX as usize) {
             return Err(ForthError::VarSpaceOverflow);
         }
 
         self.vars.push(initial_value);
-        Ok(Addr(addr as u32))
+        Ok(VarAddr(addr as u32))
     }
 
-    fn get_var_at(&self, addr: Addr) -> Result<Word, ForthError> {
-        if (addr.0 & Addr::BUILTIN) != 0 {
+    fn get_var_at(&self, addr: VarAddr) -> Result<Word, ForthError> {
+        if (addr.0 & VarAddr::BUILTIN) != 0 {
             match addr {
                 ToyForth::ADDR_IN => { return Ok(Word::int(self.input_off as i32)) },
                 _ => { return Err(ForthError::InvalidAddress(addr)) }
@@ -2180,7 +2180,7 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
-    fn set_var_at(&mut self, addr: Addr, value: Word) -> Result<(), ForthError> {
+    fn set_var_at(&mut self, addr: VarAddr, value: Word) -> Result<(), ForthError> {
         let ind = addr.0 as usize;
 
         if ind >= self.vars.len() {
@@ -2232,7 +2232,7 @@ impl<'tf> ToyForth<'tf> {
                     (WordKind::Int(a), WordKind::Int(b)) => {
                         Word::bool( (a as u32) > (b as u32) )
                     },
-                    (WordKind::Addr(Addr(a)), WordKind::Addr(Addr(b))) => {
+                    (WordKind::VarAddr(VarAddr(a)), WordKind::VarAddr(VarAddr(b))) => {
                         Word::bool( (a as u32) > (b as u32) )
                     },
                     _ => {
@@ -2248,7 +2248,7 @@ impl<'tf> ToyForth<'tf> {
                     (WordKind::Int(a), WordKind::Int(b)) => {
                         Word::bool( (a as u32) < (b as u32) )
                     },
-                    (WordKind::Addr(Addr(a)), WordKind::Addr(Addr(b))) => {
+                    (WordKind::VarAddr(VarAddr(a)), WordKind::VarAddr(VarAddr(b))) => {
                         Word::bool( (a as u32) < (b as u32) )
                     },
                     _ => {
@@ -2594,7 +2594,7 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::VarSpaceOverflow);
         }
 
-        self.push(Addr(addr.0+1).to_word())?;
+        self.push(VarAddr(addr.0+1).to_word())?;
         Ok(())
     }
 
@@ -3529,11 +3529,11 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    pub fn here(&self) -> Addr {
+    pub fn here(&self) -> VarAddr {
         let here = self.vars.len();
 
         // TODO: check for overflow!
-        Addr(here as u32)
+        VarAddr(here as u32)
     }
 
     pub fn builtin_here(&mut self) -> Result<(),ForthError> {
@@ -3607,9 +3607,9 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
-    fn pop_addr(&mut self) -> Result<Addr,ForthError> {
+    fn pop_addr(&mut self) -> Result<VarAddr,ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::Addr(addr) = w.kind() {
+        if let WordKind::VarAddr(addr) = w.kind() {
             Ok(addr)
         } else {
             Err(ForthError::InvalidArgument(w))
@@ -3863,9 +3863,9 @@ mod tests {
         assert_eq!(Word::int(-123).to_str(), None);
         assert_eq!(Word::int(-123).to_addr(), None);
 
-        assert_eq!(Word::addr(123), Word(Word::HIGH_BIT | Word::SIGN_BIT | Addr::ADDR_BIT | 123));
-        assert_eq!(Word::addr(123), Addr(123).to_word());
-        assert_eq!(Word::addr(123).to_addr().unwrap(), Addr(123));
+        assert_eq!(Word::addr(123), Word(Word::HIGH_BIT | Word::SIGN_BIT | VarAddr::ADDR_BIT | 123));
+        assert_eq!(Word::addr(123), VarAddr(123).to_word());
+        assert_eq!(Word::addr(123).to_addr().unwrap(), VarAddr(123));
         assert_eq!(Word::addr(123).to_xt(), None);
         assert_eq!(Word::addr(123).to_str(), None);
     }
@@ -3878,19 +3878,19 @@ mod tests {
             assert_eq!(w.to_xt().unwrap(), XT(x), "word {:?} does not convert to XT({}) ", w, x);
             assert_eq!(w.to_int(),  None, "XT({}) incorrectly shares a representation with int", x);
             assert_eq!(w.to_str(),  None, "XT({}) incorrectly shares a representation with ST", x);
-            assert_eq!(w.to_addr(), None, "XT({}) incorrectly shares a representation with Addr", x);
+            assert_eq!(w.to_addr(), None, "XT({}) incorrectly shares a representation with VarAddr", x);
         }
     }
 
     #[test]
     #[ignore]
     fn all_addr_values() {
-        for x in 0 .. (Addr::MAX+1) {
+        for x in 0 .. (VarAddr::MAX+1) {
             let w = Word::addr(x);
-            assert_eq!(w.to_addr().unwrap(), Addr(x), "word {:?} does not convert to Addr({}) ", w, x);
-            assert_eq!(w.to_int(), None, "Addr({}) incorrectly shares a representation with int", x);
-            assert_eq!(w.to_str(), None, "Addr({}) incorrectly shares a representation with ST", x);
-            assert_eq!(w.to_xt(),  None, "Addr({}) incorrectly shares a representation with XT", x);
+            assert_eq!(w.to_addr().unwrap(), VarAddr(x), "word {:?} does not convert to VarAddr({}) ", w, x);
+            assert_eq!(w.to_int(), None, "VarAddr({}) incorrectly shares a representation with int", x);
+            assert_eq!(w.to_str(), None, "VarAddr({}) incorrectly shares a representation with ST", x);
+            assert_eq!(w.to_xt(),  None, "VarAddr({}) incorrectly shares a representation with XT", x);
         }
     }
 
@@ -3902,7 +3902,7 @@ mod tests {
             assert_eq!(w.to_int().unwrap(), x, "word {:?} does not convert to integer {} ", w, x);
             assert_eq!(w.to_xt(),  None, "int({}) incorrectly shares a representation with XT", x);
             assert_eq!(w.to_str(), None, "int({}) incorrectly shares a representation with ST", x);
-            assert_eq!(w.to_addr(), None, "int({}) incorrectly shares a representation with Addr", x);
+            assert_eq!(w.to_addr(), None, "int({}) incorrectly shares a representation with VarAddr", x);
         }
     }
 
@@ -4456,7 +4456,7 @@ mod tests {
     fn forth_can_allocate_and_use_vars() {
         let mut forth = ToyForth::new();
 
-        let base = Addr(forth.addr_here());
+        let base = VarAddr(forth.addr_here());
 
         forth.interpret("VARIABLE V1").unwrap();
         assert_eq!(forth.stack_depth(), 0);
