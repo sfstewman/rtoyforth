@@ -958,9 +958,39 @@ impl<'tf> ToyForth<'tf> {
 : 2DUP ( n1 n2 -- n1 n2 n1 n2 ) OVER OVER ;
 : 2OVER ( n1 n2 n3 n4 -- n1 n2 n3 n4 n1 n2 ) 3 PICK 3 PICK ;
 : 2SWAP ( n1 n2 n3 n4 -- n3 n4 n1 n2 ) 3 ROLL 3 ROLL ;
-: 2>R ( n1 n2 -- ) ( R: -- n1 n2 ) SWAP >R >R ;
-: 2R> ( -- n1 n2 ) ( R: n1 n2 -- ) R> R> SWAP ;
-: 2R@ ( -- n1 n2 ) ( R: n1 n2 -- n1 n2 ) R> R> 2DUP >R >R SWAP ;
+: 2>R ( n1 n2 -- ) ( R: -- n1 n2 )
+    STATE @ 0= ABORT\" Can only use word while compiling\"
+    POSTPONE SWAP POSTPONE >R POSTPONE >R
+; IMMEDIATE
+
+: 2R> ( -- n1 n2 ) ( R: n1 n2 -- )
+    STATE @ 0= ABORT\" Can only use word while compiling\"
+    POSTPONE R> POSTPONE R> POSTPONE SWAP
+; IMMEDIATE
+
+: 2R@ ( -- n1 n2 ) ( R: n1 n2 -- n1 n2 )
+    STATE @ 0= ABORT\" Can only use word while compiling\"
+    POSTPONE R> POSTPONE R>
+    POSTPONE 2DUP
+    POSTPONE >R POSTPONE >R
+    POSTPONE SWAP
+; IMMEDIATE
+
+: 2! ( x1 x2 addr -- )
+    SWAP    ( x1 x2 addr -- x1 addr x2 )
+    OVER    ( x1 addr x2 -- x1 addr x2 addr )
+    !       ( x1 addr x2 addr -- x1 addr )
+    CELL+   ( x1 addr -- x1 addr1 )
+    !
+;
+
+: 2@ ( addr -- )
+    DUP     ( addr -- addr addr )
+    CELL+   ( addr addr -- addr addr1 )
+    @       ( addr addr1 -- addr x1 )
+    SWAP    ( addr x1 -- x1 addr )
+    @       ( x1 addr -- x1 x2 )
+;
 
 : MIN ( n1 n1 -- n3 ) 2DUP > IF SWAP THEN DROP ;
 : MAX ( n1 n1 -- n3 ) 2DUP < IF SWAP THEN DROP ;
@@ -5788,6 +5818,74 @@ vd1").unwrap();
         forth.interpret("vd1").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 212);
+    }
+
+    #[test]
+    fn two_word_stack_functions() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("1 2 3 2DROP").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret("1 2 3 2DUP").unwrap();
+        assert_eq!(forth.stack_depth(), 5);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret("0 1 2 3 2OVER").unwrap();
+        assert_eq!(forth.stack_depth(), 6);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("0 1 2 3 2SWAP").unwrap();
+        assert_eq!(forth.stack_depth(), 4);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+
+        forth.interpret(": FOO 0 1 2>R 2 3 2R> ; FOO").unwrap();
+        assert_eq!(forth.stack_depth(), 4);
+        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+
+        forth.interpret(": BAR 0 1 2>R 2R@ 2R> ; BAR").unwrap();
+        assert_eq!(forth.stack_depth(), 4);
+        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("CREATE TWO-AT 2 ALLOT").unwrap();
+        forth.interpret("0 1 2 3 TWO-AT 2!").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("TWO-AT @").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+
+        forth.interpret("TWO-AT CELL+ @").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 2);
+
+        forth.interpret("TWO-AT 2@").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+        assert_eq!(forth.pop_int().unwrap(), 2);
     }
 }
 
