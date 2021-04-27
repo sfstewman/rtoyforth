@@ -418,7 +418,7 @@ struct DictEntry {
 impl DictEntry {
     const PRIMITIVE : u32 = 1<<0; // 0x0000_0001
     const IMMEDIATE : u32 = 1<<1; // 0x0000_0002
-    const DEFERRED  : u32 = 1<<3; // 0x0000_0008
+    const DEFERRED  : u32 = 1<<2; // 0x0000_0008
 
     fn check_flag(&self, flag: u32) -> bool {
         (self.flags & flag) == flag
