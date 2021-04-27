@@ -1006,6 +1006,14 @@ impl<'tf> ToyForth<'tf> {
     -       ( num prod        -- rem )
 ;
 
+\\ Do we need to do this as double-cell quantities to handle overflow?
+: /MOD ( num div -- rem quot )
+    2DUP /  ( num div -- num div quot )
+    DUP >R  ( num div quot -- num div quot ) ( R: -- quot )
+    * -     ( num div quot -- rem ) ( R: quot -- quot )
+    R>      ( rem -- rem quot ) ( R: quot -- )
+;
+
 : COUNT DUP CHAR+ SWAP C@ ;
 
 \\ Should this be a builtin?
@@ -1050,7 +1058,6 @@ impl<'tf> ToyForth<'tf> {
         !
     THEN
 ; IMMEDIATE
-
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
@@ -5409,6 +5416,34 @@ MSB 2/ MSB AND \\ 0
         assert_eq!(forth.pop_int().unwrap(),  1); // 10 3 MOD \\  1
         assert_eq!(forth.pop_int().unwrap(), -1); // -5 2 MOD \\ -1
         assert_eq!(forth.pop_int().unwrap(),  1); //  5 2 MOD \\  1
+
+        forth.interpret("\
+ 5 2 /MOD \\  1  2
+-5 2 /MOD \\ -1 -2
+10 3 /MOD \\  1  3
+10 1 /MOD \\  0 10
+11 3 /MOD \\  2  3
+12 3 /MOD \\  0  4").unwrap();
+
+        assert_eq!(forth.stack_depth(), 12);
+
+        assert_eq!(forth.pop_int().unwrap(),  4); // 12 3 /MOD \\  0  4
+        assert_eq!(forth.pop_int().unwrap(),  0);
+
+        assert_eq!(forth.pop_int().unwrap(),  3); // 11 3 /MOD \\  2  3
+        assert_eq!(forth.pop_int().unwrap(),  2);
+
+        assert_eq!(forth.pop_int().unwrap(), 10); // 10 1 /MOD \\  0 10
+        assert_eq!(forth.pop_int().unwrap(),  0);
+
+        assert_eq!(forth.pop_int().unwrap(),  3); // 10 3 /MOD \\  1  3
+        assert_eq!(forth.pop_int().unwrap(),  1);
+
+        assert_eq!(forth.pop_int().unwrap(), -2); // -5 2 /MOD \\ -1 -2
+        assert_eq!(forth.pop_int().unwrap(), -1);
+
+        assert_eq!(forth.pop_int().unwrap(),  2); //  5 2 /MOD \\  1  2
+        assert_eq!(forth.pop_int().unwrap(),  1);
     }
 
     #[test]
