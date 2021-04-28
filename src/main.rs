@@ -816,7 +816,10 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func("PIC", ToyForth::builtin_pic);
 
+        tf.add_func("CALLOT", ToyForth::builtin_callot);
         tf.add_func("PAD", ToyForth::builtin_pad);
+        tf.add_func("CSHRINK", ToyForth::builtin_cshrink);
+        tf.add_func("CLENGTH", ToyForth::builtin_clength);
 
         tf.add_func("..", ToyForth::builtin_dot_dot);
         tf.add_func(":", ToyForth::builtin_colon);
@@ -2000,6 +2003,10 @@ impl<'tf> ToyForth<'tf> {
         self.push(Word::int(v))
     }
 
+    pub fn push_str(&mut self, st: ST) -> Result<(), ForthError> {
+        self.push(st.to_word())
+    }
+
     fn drop(&mut self) -> Result<(), ForthError> {
         if let Some(_) = self.dstack.pop() {
             Ok(())
@@ -2665,8 +2672,69 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn builtin_callot(&mut self) -> Result<(), ForthError> {
+        let n = self.pop_int()?;
+
+        // need to handle larger strings at some point
+        if n < 0 {
+            return Err(ForthError::NumberOutOfRange);
+        }
+
+        if n > u8::MAX as i32 {
+            return Err(ForthError::StringTooLong);
+        }
+
+        let off = self.strings.len();
+        if off > u32::MAX as usize {
+            return Err(ForthError::StringOffsetTooLarge);
+        }
+
+        self.strings.resize(self.strings.len() + (n as usize), 0);
+        self.push_str(ST::allocated_space(off as u32, n as u8));
+
+        Ok(())
+    }
+
     fn builtin_pad(&mut self) -> Result<(), ForthError> {
         self.push_str(ST::pad_space(0,std::cmp::min(u8::MAX as usize, self.pad.len()) as u8));
+        Ok(())
+    }
+
+    fn builtin_cshrink(&mut self) -> Result<(), ForthError> {
+        let len = self.pop_int()?;
+        let st = self.pop_str()?;
+
+        if len < 0 {
+            return Err(ForthError::NumberOutOfRange);
+        }
+
+        let new_len = std::cmp::min(st.len(), len as u32) as u8;
+
+        let new_st = match st {
+            ST::Allocated(_) => {
+                ST::allocated_space(st.addr(), new_len)
+            },
+            ST::PadSpace(ScratchLoc{off,..}) => {
+                ST::pad_space(off, new_len)
+            },
+            ST::WordSpace(ScratchLoc{off,..}) => {
+                ST::word_space(off, new_len)
+            },
+            ST::InputSpace(ScratchLoc{off,..}) => {
+                ST::input_space(off, new_len)
+            },
+            ST::PicSpace(ScratchLoc{off,..}) => {
+                ST::pic_space(off, new_len)
+            },
+        };
+
+        self.push_str(new_st)?;
+        Ok(())
+    }
+
+    fn builtin_clength(&mut self) -> Result<(), ForthError> {
+        let st = self.pop_str()?;
+        self.push_int(st.len() as i32)?;
         Ok(())
     }
 
@@ -5960,6 +6028,32 @@ vd1").unwrap();
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), 3);
         assert_eq!(forth.pop_int().unwrap(), 2);
+    }
+
+    #[test]
+    fn callot_cshrink_and_clength() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+VARIABLE st1
+100 CALLOT st1 !
+").unwrap();
+
+        forth.interpret("st1 @ CLENGTH").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 100);
+
+        forth.interpret("st1 @ 50 CSHRINK CLENGTH").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 50);
+
+        forth.interpret("st1 @ 150 CSHRINK CLENGTH").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 100);
+
+        forth.interpret("st1 @ CHAR+ CLENGTH").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 99);
     }
 }
 
