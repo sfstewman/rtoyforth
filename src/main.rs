@@ -1259,7 +1259,7 @@ impl<'tf> ToyForth<'tf> {
             if let WordKind::Str(st) = k {
                 let s0 = self.maybe_string_at(st);
                 if let Ok(s) = s0 {
-                    eprintln!("[D {:3}] {:?} \"{}\"", i,w.kind(), s);
+                    eprintln!("[D {:3}] {} \"{}\"", i,st.descr(), s);
                 } else if let Ok(b) = self.bytes_at(st) {
                     eprintln!("[D {:3}] {:?} {:?}", i,w.kind(), b);
                 } else {
