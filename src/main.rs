@@ -212,6 +212,22 @@ impl ST {
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
+enum Addr {
+    Var(VarAddr),
+    Char(ST),
+}
+
+impl Addr {
+    fn c_addr(&self) -> Option<ST> {
+        if let Addr::Char(ch) = self { Some(*ch) } else { None }
+    }
+
+    fn a_addr(&self) -> Option<VarAddr> {
+        if let Addr::Var(v) = self { Some(*v) } else { None }
+    }
+}
+
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
 enum WordKind {
     Int(i32),
     XT(XT),
@@ -303,6 +319,18 @@ impl Word {
 
     pub fn to_addr(self) -> Option<VarAddr> {
         if let WordKind::VarAddr(x) = self.kind() { Some(x) } else { None }
+    }
+
+    pub fn to_char(self) -> Result<u8, ForthError> {
+        if let WordKind::Int(x) = self.kind() {
+            if x < 0 && x > (u8::MAX as i32) {
+                return Err(ForthError::InvalidChar(x));
+            }
+
+            return Ok(x as u8);
+        }
+
+        return Err(ForthError::InvalidArgument(self));
     }
 }
 
@@ -2297,9 +2325,54 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn get_char_at(&self, st: ST) -> Result<u8, ForthError> {
+        let b = self.bytes_at(st)?;
+        if b.len() == 0 {
+            return Err(ForthError::InvalidEmptyString);
+        }
+
+        Ok(b[0])
+    }
+
+    fn set_char_at(&mut self, st: ST, value: u8) -> Result<(), ForthError> {
+        let b = self.bytes_at_mut(st)?;
+        if b.len() == 0 {
+            return Err(ForthError::InvalidEmptyString);
+        }
+
+        b[0] = value;
+        Ok(())
+    }
+
+    fn get_addr_value(&self, addr: Addr) -> Result<Word, ForthError> {
+        match addr {
+            Addr::Var(a_addr) => {
+                self.get_var_at(a_addr)
+            },
+            Addr::Char(c_addr) => {
+                let ch = self.get_char_at(c_addr)?;
+                Ok(Word::int(ch as i32))
+            },
+        }
+    }
+
+    fn set_addr_value(&mut self, addr: Addr, value: Word) -> Result<(), ForthError> {
+        match addr {
+            Addr::Var(a_addr) => {
+                self.set_var_at(a_addr, value)?;
+            },
+            Addr::Char(c_addr) => {
+                let ch = value.to_char()?;
+                self.set_char_at(c_addr, ch)?;
+            },
+        };
+
+        Ok(())
+    }
+
     fn builtin_var_get(&mut self) -> Result<(), ForthError> {
         let addr = self.pop_addr()?;
-        let w = self.get_var_at(addr)?;
+        let w = self.get_addr_value(addr)?;
         self.push(w)?;
         Ok(())
     }
@@ -2307,7 +2380,7 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_var_set(&mut self) -> Result<(), ForthError> {
         let addr = self.pop_addr()?;
         let val = self.pop().ok_or(ForthError::StackUnderflow)?;
-        self.set_var_at(addr, val)?;
+        self.set_addr_value(addr, val)?;
         Ok(())
     }
 
@@ -2693,7 +2766,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_cell_plus(&mut self) -> Result<(), ForthError> {
-        let addr = self.pop_addr()?;
+        let addr = self.pop_var_addr()?;
 
         if (addr.0 as usize) + 1 > self.vars.len() {
             return Err(ForthError::VarSpaceOverflow);
@@ -3401,22 +3474,20 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_char_bang(&mut self) -> Result<(), ForthError> {
-        let st = self.pop_str()?;
-        let ch = self.pop_char()?;
+        let addr = self.pop_addr()?;
+        // let ch = self.pop_char()?;
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
-        if st.len() == 0 {
-            return Err(ForthError::InvalidEmptyString);
-        }
-
-        let b = self.bytes_at_mut(st)?;
-        b[0] = ch;
+        self.set_addr_value(addr, w)?;
         Ok(())
     }
 
     fn builtin_char_at(&mut self) -> Result<(), ForthError> {
-        let st = self.pop_str()?;
-        let b = *self.bytes_at(st)?.first().ok_or(ForthError::InvalidEmptyString)?;
-        self.push_int(b as i32)?;
+        let addr = self.pop_addr()?;
+        let w = self.get_addr_value(addr)?;
+
+        let ch = w.to_char()?;
+        self.push_int(ch as i32)?;
         Ok(())
     }
 
@@ -3796,7 +3867,20 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
-    fn pop_addr(&mut self) -> Result<VarAddr,ForthError> {
+    fn pop_addr(&mut self) -> Result<Addr,ForthError> {
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+        match w.kind() {
+            WordKind::VarAddr(a_addr) => {
+                Ok(Addr::Var(a_addr))
+            },
+            WordKind::Str(c_addr) => {
+                Ok(Addr::Char(c_addr))
+            },
+            _ => Err(ForthError::InvalidArgument(w)),
+        }
+    }
+
+    fn pop_var_addr(&mut self) -> Result<VarAddr,ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
         if let WordKind::VarAddr(addr) = w.kind() {
             Ok(addr)
@@ -4653,7 +4737,7 @@ mod tests {
         forth.interpret("V1").unwrap();
         assert_eq!(forth.stack_depth(), 1);
 
-        assert_eq!(forth.pop_addr().unwrap(), base);
+        assert_eq!(forth.pop_var_addr().unwrap(), base);
         assert_eq!(forth.stack_depth(), 0);
 
         forth.interpret("999 V1 !").unwrap();
@@ -4670,7 +4754,7 @@ mod tests {
 
         forth.interpret("STATE").unwrap();
         assert_eq!(forth.stack_depth(), 1);
-        assert_eq!(forth.pop_addr().unwrap(), ToyForth::ADDR_STATE);
+        assert_eq!(forth.pop_var_addr().unwrap(), ToyForth::ADDR_STATE);
 
         forth.interpret("STATE @").unwrap();
         assert_eq!(forth.stack_depth(), 1);
@@ -6127,6 +6211,50 @@ VARIABLE st1
         forth.interpret("st1 @ CHAR+ CLENGTH").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 99);
+    }
+
+    #[test]
+    fn char_bang_and_char_at_work_on_string_spaces_and_addresses() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+VARIABLE ch1
+VARIABLE st1
+
+1 CALLOT st1 !
+
+BL st1 @ C!
+BL ch1 C!
+
+ch1 C@
+st1 @ C@
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), ' ' as i32);
+        assert_eq!(forth.pop_int().unwrap(), ' ' as i32);
+    }
+
+    #[test]
+    fn bang_and_at_work_on_string_spaces_and_addresses() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("\
+VARIABLE ch1
+VARIABLE st1
+
+1 CALLOT st1 !
+
+BL st1 @ !
+BL ch1 !
+
+ch1 @
+st1 @ @
+").unwrap();
+
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), ' ' as i32);
+        assert_eq!(forth.pop_int().unwrap(), ' ' as i32);
     }
 }
 
