@@ -846,6 +846,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("ALLOT", ToyForth::builtin_allot);
         tf.add_func("CELL+", ToyForth::builtin_cell_plus);
         tf.add_func(",",     ToyForth::builtin_comma);
+        tf.add_func("C,",    ToyForth::builtin_comma);
 
         tf.add_func("PIC", ToyForth::builtin_pic);
 
@@ -996,6 +997,9 @@ impl<'tf> ToyForth<'tf> {
 : ALIGN   ; \\ data-space words are always aligned
 : ALIGNED DUP DROP ; \\ data-space words are always aligned
 : CELLS   0 + ; \\ cells are each one address unit wide
+: CHARS   0 + ; \\ chars in a-addr space are also one unit wide
+
+: BUFFER: CREATE ALLOT ;
 
 : ABS DUP 0< IF NEGATE THEN ;
 
