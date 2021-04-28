@@ -2801,7 +2801,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn builtin_pic(&mut self) -> Result<(), ForthError> {
-        self.push_str(ST::pic_space(0,std::cmp::min(u8::MAX as usize, self.pic.len()) as u8));
+        self.push_str(ST::pic_space(0,std::cmp::min(u8::MAX as usize, self.pic.len()) as u8))?;
         Ok(())
     }
 
@@ -2823,13 +2823,13 @@ impl<'tf> ToyForth<'tf> {
         }
 
         self.strings.resize(self.strings.len() + (n as usize), 0);
-        self.push_str(ST::allocated_space(off as u32, n as u8));
+        self.push_str(ST::allocated_space(off as u32, n as u8))?;
 
         Ok(())
     }
 
     fn builtin_pad(&mut self) -> Result<(), ForthError> {
-        self.push_str(ST::pad_space(0,std::cmp::min(u8::MAX as usize, self.pad.len()) as u8));
+        self.push_str(ST::pad_space(0,std::cmp::min(u8::MAX as usize, self.pad.len()) as u8))?;
         Ok(())
     }
 
