@@ -240,6 +240,8 @@ impl Word {
     const SIGN_BIT : u32 = 0x4000_0000;
     const INT_MASK : u32 = 0x7fff_ffff;
 
+    const INT_BITS : u32 = 31;
+
     const INT_MIN  : i32 = -1073741824;
     const INT_MAX  : i32 =  1073741823;
 
@@ -2453,13 +2455,13 @@ impl<'tf> ToyForth<'tf> {
         let result: Word = match op {
             BinOp::Plus  => { Word::int(a+b) },
             BinOp::Minus => { Word::int(a-b) },
-            BinOp::Star  => { Word::int(a*b) },
+            BinOp::Star  => { Word::int(a.wrapping_mul(b)) },
             BinOp::Slash => {
                 if b == 0 {
                     return Err(ForthError::DivisionByZero);
                 }
 
-                Word::int(a/b)
+                Word::int(a.wrapping_div(b))
             },
 
             BinOp::And      => { Word::int(((a as u32) & (b as u32)) as i32) },
@@ -2475,7 +2477,23 @@ impl<'tf> ToyForth<'tf> {
             },
             BinOp::RightShift => {
                 // TODO: check b for range
-                Word( ((a as u32) >> (b as u32)) & Word::INT_MASK )
+                let ub = (b as u32);
+
+                // ua requires some care.  -1 is all-bits-set, and has 31 bits in the native type.
+                // 
+                // When naively cast to u32, it has 32 bits, and the MSB is set.
+                //
+                // This creates a problem for right shift, because that extra bit will be shifted
+                // downward, in effect making the RSHIFT shift one bit less when the operand has
+                // the MSB set (ie: is negative).
+                //
+                // eg: `-1 1 RSHIFT` will yield the first 31 bits set, which is -1 in the native
+                // type.
+                //
+                // To avoid this, we apply the integer mask to zero out the u32 MSB.
+                //
+                let ua = (a as u32) & Word::INT_MASK;
+                Word( (ua >> ub) & Word::INT_MASK )
             },
 
             BinOp::Equal | BinOp::NotEqual | BinOp::UnsignedGreater | BinOp::UnsignedLess => {
@@ -3850,7 +3868,7 @@ impl<'tf> ToyForth<'tf> {
 
     fn pop_uint(&mut self) -> Result<u32, ForthError> {
         let v = self.pop_int()?;
-        Ok(v as u32)
+        Ok((v as u32) & Word::INT_MASK)
     }
 
     fn pop_str(&mut self) -> Result<ST,ForthError> {
