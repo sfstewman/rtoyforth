@@ -415,6 +415,10 @@ enum BinOp {
     Star,
     Slash,
 
+    // single cell operands, double cell output
+    MStar,
+    UMStar,
+
     And,
     Or,
     Xor,
@@ -809,6 +813,10 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("*", Instr::BinaryOp(BinOp::Star));
         tf.add_prim("/", Instr::BinaryOp(BinOp::Slash));
 
+        // double-cell arithmetic primitives
+        tf.add_prim("M*", Instr::BinaryOp(BinOp::MStar));
+        tf.add_prim("UM*", Instr::BinaryOp(BinOp::UMStar));
+
         tf.add_prim("AND", Instr::BinaryOp(BinOp::And));
         tf.add_prim("OR", Instr::BinaryOp(BinOp::Or));
         tf.add_prim("XOR", Instr::BinaryOp(BinOp::Xor));
@@ -826,6 +834,11 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_prim("U>", Instr::BinaryOp(BinOp::UnsignedGreater));
         tf.add_prim("U<", Instr::BinaryOp(BinOp::UnsignedLess));
+
+        // double-cell arithmetic builtins
+        tf.add_func("*/MOD", ToyForth::builtin_star_slash_mod);
+        tf.add_func("FM/MOD", ToyForth::builtin_fm_slash_mod);
+        tf.add_func("SM/REM", ToyForth::builtin_sm_slash_rem);
 
         let (emit,_) = tf.add_func("EMIT", ToyForth::builtin_emit);
 
@@ -858,6 +871,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("CLENGTH", ToyForth::builtin_clength);
 
         tf.add_func("..", ToyForth::builtin_dot_dot);
+        tf.add_func("U.", ToyForth::builtin_u_dot);
         tf.add_func(":", ToyForth::builtin_colon);
         tf.add_func(":NONAME", ToyForth::builtin_colon_noname);
         tf.add_immed(";", ToyForth::builtin_semi);
@@ -2176,6 +2190,85 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn pop_dbl_int(&mut self) -> Result<i64, ForthError> {
+        let hi = self.pop_int()?;
+        let lo = self.pop_int()?;
+
+        let d = (((hi as u64) << 32) | (lo as u64)) as i64;
+        return Ok(d);
+    }
+
+    fn floored_double_div_single(numer: i64, denom: i32) -> Result<(i32,i32), ForthError> {
+        if denom == 0 {
+            return Err(ForthError::DivisionByZero);
+        }
+
+        let div : i64 = denom as i64;
+        let quot0 : i64 = numer.wrapping_div(div);
+        let rem0 : i64 = numer - (quot0 * div);
+
+        let (quot,rem) = if rem0 == 0 || ((numer < 0) == (div < 0)) {
+            (quot0,rem0)
+        } else {
+            (quot0-1, rem0 + div)
+        };
+
+        if quot > (Word::INT_MAX as i64) || quot < (Word::INT_MIN as i64) {
+            return Err(ForthError::NumberOutOfRange);
+        }
+
+        Ok((quot as i32, rem as i32))
+    }
+
+    fn double_div_single(numer: i64, denom: i32) -> Result<(i32,i32), ForthError> {
+        let div : i64 = denom as i64;
+        if div == 0 {
+            return Err(ForthError::DivisionByZero);
+        }
+
+        let quot : i64 = numer.wrapping_div(div);
+
+        if quot > (Word::INT_MAX as i64) || quot < (Word::INT_MIN as i64) {
+            return Err(ForthError::NumberOutOfRange);
+        }
+
+        let rem : i64 = numer - (quot * div);
+        Ok((quot as i32, rem as i32))
+    }
+
+    fn builtin_star_slash_mod(&mut self) -> Result<(), ForthError> {
+        let div = self.pop_int()?;
+        let a = self.pop_int()?;
+        let b = self.pop_int()?;
+
+        let mult : i64 = (a as i64).wrapping_mul(b as i64);
+        let (quot,rem) = ToyForth::double_div_single(mult, div)?;
+
+        self.push_int(rem as i32)?;
+        self.push_int(quot as i32)?;
+        Ok(())
+    }
+
+    fn builtin_fm_slash_mod(&mut self) -> Result<(), ForthError> {
+        let denom = self.pop_int()?;
+        let numer = self.pop_dbl_int()?;
+
+        let (quot,rem) = ToyForth::floored_double_div_single(numer, denom)?;
+        self.push_int(rem as i32)?;
+        self.push_int(quot as i32)?;
+        Ok(())
+    }
+
+    fn builtin_sm_slash_rem(&mut self) -> Result<(), ForthError> {
+        let denom = self.pop_int()?;
+        let numer = self.pop_dbl_int()?;
+
+        let (quot,rem) = ToyForth::double_div_single(numer, denom)?;
+        self.push_int(rem as i32)?;
+        self.push_int(quot as i32)?;
+        Ok(())
+    }
+
     fn builtin_defer(&mut self) -> Result<(), ForthError> {
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
         // FIXME: completely unnecessary copy here...
@@ -2462,6 +2555,36 @@ impl<'tf> ToyForth<'tf> {
                 }
 
                 Word::int(a.wrapping_div(b))
+            },
+
+            BinOp::MStar => {
+                let m = (a as i64).wrapping_mul(b as i64);
+                let um = m as u64;
+
+                let cell_mask = Word::INT_MASK as u64;
+
+                let lo : u32 = (um & cell_mask) as u32;
+                let hi : u32 = (um >> Word::INT_BITS) as u32;
+
+                self.push(Word::int(lo as i32))?;
+                self.push(Word::int(hi as i32))?;
+                return Ok(());
+            },
+
+            BinOp::UMStar => {
+                let ua = (a as u32);
+                let ub = (b as u32);
+                let um = (ua as u64).wrapping_mul(ub as u64);
+                let cell_mask = Word::INT_MASK as u64;
+
+                let lo : u32 = (um & cell_mask) as u32;
+                let hi : u32 = (um >> Word::INT_BITS) as u32;
+
+                eprintln!("a = {}, b = {}, um = {}, lo = {}, hi = {}",
+                      (a as u64), (b as u64), um, lo, hi);
+                self.push(Word::int(lo as i32))?;
+                self.push(Word::int(hi as i32))?;
+                return Ok(());
             },
 
             BinOp::And      => { Word::int(((a as u32) & (b as u32)) as i32) },
@@ -2816,6 +2939,19 @@ impl<'tf> ToyForth<'tf> {
             } else {
                 write!(wr, "{}", w)?;
             }
+            wr.flush()?;
+        }
+
+        Ok(())
+    }
+
+    fn builtin_u_dot(&mut self) -> Result<(), ForthError> {
+        let u = self.pop_uint()?;
+
+        if let Some(out) = &mut self.out_stream {
+            let mut wr = out.borrow_mut();
+
+            write!(wr, "{} ", u)?;
             wr.flush()?;
         }
 
