@@ -566,6 +566,7 @@ enum ForthError {
     InvalidEscape(char),
     InvalidChar(i32),
     InvalidAddress(VarAddr),
+    InvalidAddressAndOffset(Addr,i32),
     InvalidCountedString(ST),
     InvalidStringValue(u32),
     InvalidFunction(u32),
@@ -617,12 +618,13 @@ impl ForthError {
     const INVALID_ESCAPE                    : u32 = 137;
     const INVALID_CHAR                      : u32 = 138;
     const INVALID_ADDRESS                   : u32 = 139;
+    const INVALID_ADDRESS_AND_OFFSET        : u32 = 140;
 
-    const INVALID_COUNTED_STRING            : u32 = 140;
-    const INVALID_STRING_VALUE              : u32 = 141;
-    const INVALID_FUNCTION                  : u32 = 142;
-    const INVALID_PC                        : u32 = 143;
-    const IO_ERROR                          : u32 = 144;
+    const INVALID_COUNTED_STRING            : u32 = 141;
+    const INVALID_STRING_VALUE              : u32 = 142;
+    const INVALID_FUNCTION                  : u32 = 143;
+    const INVALID_PC                        : u32 = 144;
+    const IO_ERROR                          : u32 = 145;
 
     fn from_code(code: u32) -> ForthError {
         match code {
@@ -725,6 +727,7 @@ impl ForthError {
             ForthError::InvalidEscape(_)				=> ForthError::INVALID_ESCAPE,
             ForthError::InvalidChar(_)			        => ForthError::INVALID_CHAR,
             ForthError::InvalidAddress(_)				=> ForthError::INVALID_ADDRESS,
+            ForthError::InvalidAddressAndOffset(..)		=> ForthError::INVALID_ADDRESS_AND_OFFSET,
             ForthError::InvalidCountedString(_)			=> ForthError::INVALID_COUNTED_STRING,
             ForthError::InvalidStringValue(_)			=> ForthError::INVALID_STRING_VALUE,
             ForthError::InvalidFunction(_)				=> ForthError::INVALID_FUNCTION,
@@ -840,6 +843,10 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("FM/MOD", ToyForth::builtin_fm_slash_mod);
         tf.add_func("SM/REM", ToyForth::builtin_sm_slash_rem);
         tf.add_func("UM/MOD", ToyForth::builtin_um_slash_mod);
+
+        // address offset words
+        tf.add_func("ADDR+", ToyForth::builtin_addr_plus);
+        tf.add_func("ADDR-", ToyForth::builtin_addr_minus);
 
         let (emit,_) = tf.add_func("EMIT", ToyForth::builtin_emit);
 
@@ -2120,6 +2127,17 @@ impl<'tf> ToyForth<'tf> {
         self.push(st.to_word())
     }
 
+    fn push_addr(&mut self, addr: Addr) -> Result<(),ForthError> {
+        match addr {
+            Addr::Var(a_addr) => self.push_var_addr(a_addr),
+            Addr::Char(c_addr) => self.push_str(c_addr),
+        }
+    }
+
+    fn push_var_addr(&mut self, addr: VarAddr) -> Result<(),ForthError> {
+        self.push(addr.to_word())
+    }
+
     fn drop(&mut self) -> Result<(), ForthError> {
         if let Some(_) = self.dstack.pop() {
             Ok(())
@@ -2299,6 +2317,48 @@ impl<'tf> ToyForth<'tf> {
 
         self.push_int(rem as i32)?;
         self.push_int(quot as i32)?;
+        Ok(())
+    }
+
+    fn offset_addr(&self, addr: Addr, off: i32) -> Result<Addr, ForthError> {
+        match addr {
+            Addr::Var(a_addr) => {
+                let pos = (a_addr.0 as i64) + (off as i64);
+                // eprintln!("addr = {:?}, off = {}, pos = {}, len(vars) = {}",
+                //      addr, off, pos, self.vars.len());
+
+                // 
+                if pos < 0 || (pos as usize) > self.vars.len() {
+                    return Err(ForthError::InvalidAddressAndOffset(addr, off));
+                }
+
+                Ok(Addr::Var(VarAddr(pos as u32)))
+            },
+            Addr::Char(caddr) => {
+                if off < 0 || off > (u8::MAX as i32) {
+                    return Err(ForthError::InvalidAddressAndOffset(addr, off));
+                }
+
+                Ok(Addr::Char(caddr.offset(off as u8)))
+            },
+        }
+    }
+
+    fn builtin_addr_plus(&mut self) -> Result<(), ForthError> {
+        let off = self.pop_int()?;
+        let addr = self.pop_addr()?;
+
+        let new_addr = self.offset_addr(addr,off)?;
+        self.push_addr(new_addr)?;
+        Ok(())
+    }
+
+    fn builtin_addr_minus(&mut self) -> Result<(), ForthError> {
+        let off = self.pop_int()?;
+        let addr = self.pop_addr()?;
+
+        let new_addr = self.offset_addr(addr,-off)?;
+        self.push_addr(new_addr)?;
         Ok(())
     }
 
@@ -6547,6 +6607,105 @@ st1 @ @
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(),  1);
         assert_eq!(forth.pop_int().unwrap(),  3);
+    }
+
+    #[test]
+    fn can_offset_var_addresses() {
+        let mut forth = ToyForth::new();
+
+        // variable addresses allow both positive and negative offsets within the var address space
+
+        forth.interpret("\
+VARIABLE a-addr1
+VARIABLE a-addr2
+").unwrap();
+
+        let here = forth.here();
+        forth.interpret("\
+HERE a-addr1 !
+10 ALLOT 
+a-addr1 @ 5 ADDR+ DUP a-addr2 !").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_var_addr().unwrap(), VarAddr(here.0 + 5));
+
+        forth.interpret("a-addr2 @ 2 ADDR-").unwrap();
+        assert_eq!(forth.stack_depth(), 1);
+        assert_eq!(forth.pop_var_addr().unwrap(), VarAddr(here.0 + 3));
+
+        forth.interpret("a-addr2 @ 5 ADDR+").unwrap();
+        assert_eq!(forth.pop_var_addr().unwrap(), VarAddr(here.0 + 10));
+
+        {
+            let err = forth.interpret("a-addr2 @ 6 ADDR+").unwrap_err();
+            assert!(matches!(err, ForthError::InvalidAddressAndOffset(Addr::Var(VarAddr(_)),_)));
+            if let ForthError::InvalidAddressAndOffset(Addr::Var(VarAddr(addr)),off) = err {
+                assert_eq!(addr, here.0+5);
+                assert_eq!(off, 6);
+            }
+        }
+    }
+
+    #[test]
+    fn can_offset_char_addresses() {
+        let mut forth = ToyForth::new();
+
+        // character/string/ST addresses allow both positive and negative offsets within the var
+        // address space
+
+        forth.interpret("\
+VARIABLE c-addr1
+VARIABLE c-addr2
+").unwrap();
+
+        let char_here = forth.char_here();
+
+        let here = forth.here();
+        {
+            forth.interpret("100 CALLOT c-addr1 ! c-addr1 @");
+            assert_eq!(forth.stack_depth(), 1);
+            let st = forth.pop_str().unwrap();
+            assert!(matches!(st, ST::Allocated(_)));
+            assert_eq!(st.addr(), char_here);
+            assert_eq!(st.len(), 100);
+        }
+
+        {
+            forth.interpret("c-addr1 @ 25 ADDR+ DUP c-addr2 !").unwrap();
+            assert_eq!(forth.stack_depth(), 1);
+            let st = forth.pop_str().unwrap();
+            assert!(matches!(st, ST::Allocated(_)));
+            assert_eq!(st.addr(), char_here+25);
+            assert_eq!(st.len(), 75);
+        }
+
+        {
+            let err = forth.interpret("c-addr1 @ -10 ADDR+").unwrap_err();
+            assert!(matches!(err, ForthError::InvalidAddressAndOffset(Addr::Char(_),_)));
+            if let ForthError::InvalidAddressAndOffset(Addr::Char(st),off) = err {
+                assert_eq!(st.addr(), char_here);
+                assert_eq!(st.len(), 100);
+                assert_eq!(off, -10);
+            }
+        }
+
+        /* check that ADDR+ works for non-allocated strings (eg: PAD) */
+        {
+            forth.interpret("PAD c-addr1 ! c-addr1 @").unwrap();
+            assert_eq!(forth.stack_depth(), 1);
+            let st = forth.pop_str().unwrap();
+            assert!(matches!(st, ST::PadSpace(_)));
+            assert_eq!(st.addr(), 0);
+            assert_eq!(st.len(), 255);
+        }
+
+        {
+            forth.interpret("c-addr1 @ 25 ADDR+").unwrap();
+            assert_eq!(forth.stack_depth(), 1);
+            let st = forth.pop_str().unwrap();
+            assert!(matches!(st, ST::PadSpace(_)));
+            assert_eq!(st.addr(), 25);
+            assert_eq!(st.len(), 255-25);
+        }
     }
 }
 
