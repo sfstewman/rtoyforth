@@ -880,6 +880,8 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func("..", ToyForth::builtin_dot_dot);
         tf.add_func("U.", ToyForth::builtin_u_dot);
+        tf.add_func("U.R", ToyForth::builtin_u_dot_r);
+
         tf.add_func(":", ToyForth::builtin_colon);
         tf.add_func(":NONAME", ToyForth::builtin_colon_noname);
         tf.add_immed(";", ToyForth::builtin_semi);
@@ -3021,14 +3023,74 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn free_field_number(mut num: i64, base: i64, out: &mut [u8], min_width: usize, trailing: bool) -> &[u8] {
+        let mut off = out.len();
+
+        let neg = num < 0;
+
+        if neg {
+            num = -num;
+        }
+
+        if trailing {
+            off -= 1;
+            out[off] = ' ' as u8;
+        }
+
+        loop {
+            let dig = (num % base) as u8;
+
+            off -= 1;
+            out[off] = if dig <= 9 {
+                ('0' as u8) + dig
+            } else {
+                ('A' as u8) + (dig-10)
+            };
+
+            num /= base;
+            if num == 0 {
+                break
+            }
+        }
+
+        if neg {
+            off -= 1;
+            out[off] = '-' as u8;
+        }
+
+        let mut width = out.len() - off;
+        while min_width > width {
+            off -= 1;
+            width += 1;
+            out[off] = ' ' as u8;
+        }
+
+        &out[off..]
+    }
+
+    fn free_field_display<'b>(&self, num: i64, out: &'b mut [u8], min_width: usize, trailing: bool) -> Result<&'b [u8], ForthError> {
+        let base_var = self.get_var_at(ToyForth::ADDR_BASE)?;
+        let base_signed = base_var.to_int().ok_or(ForthError::InvalidNumberBase)?;
+
+        if base_signed < 0 || base_signed > 36 {
+            return Err(ForthError::InvalidNumberBase);
+        }
+        let base = base_signed as i64; // 10; // FIXME!
+
+        Ok(ToyForth::free_field_number(num, base, out, min_width, trailing))
+    }
+
     fn builtin_dot_dot(&mut self) -> Result<(), ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
-        if let Some(out) = &mut self.out_stream {
+        if let Some(out) = &self.out_stream {
             let mut wr = out.borrow_mut();
 
             if let WordKind::Int(n) = w.kind() {
-                write!(wr, "{}", n)?;
+                let mut buf = [0 as u8; 64];
+                wr.write(self.free_field_display(n as i64, &mut buf, 0, false)?)?;
+                // wr.write(&buf[..n])?;
+                // write!(wr, "{}", n)?;
             } else {
                 write!(wr, "{}", w)?;
             }
@@ -3041,10 +3103,34 @@ impl<'tf> ToyForth<'tf> {
     fn builtin_u_dot(&mut self) -> Result<(), ForthError> {
         let u = self.pop_uint()?;
 
-        if let Some(out) = &mut self.out_stream {
+        if let Some(out) = &self.out_stream {
             let mut wr = out.borrow_mut();
 
-            write!(wr, "{} ", u)?;
+            let mut buf = [0 as u8; 256];
+            wr.write(self.free_field_display(u as i64, &mut buf, 0, true)?)?;
+
+            // write!(wr, "{} ", u)?;
+            wr.flush()?;
+        }
+
+        Ok(())
+    }
+
+    fn builtin_u_dot_r(&mut self) -> Result<(), ForthError> {
+        let n = self.pop_int()?;
+        let u = self.pop_uint()?;
+
+        if n < 0 || n > 255 {
+            return Err(ForthError::NumberOutOfRange);
+        }
+
+        if let Some(out) = &self.out_stream {
+            let mut wr = out.borrow_mut();
+
+            let mut buf = [0 as u8; 256];
+            wr.write(self.free_field_display(u as i64, &mut buf, n as usize, false)?)?;
+
+            // write!(wr, "{} ", u)?;
             wr.flush()?;
         }
 
@@ -6506,6 +6592,57 @@ st1 @ @
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), ' ' as i32);
         assert_eq!(forth.pop_int().unwrap(), ' ' as i32);
+    }
+
+    #[test]
+    fn unsigned_dot_words() {
+        let mut forth = ToyForth::new();
+        let outv = Rc::new(RefCell::new(Vec::<u8>::new()));
+
+        forth.capture_interpret("1 U.", outv.clone()).unwrap();
+        {
+            let mut outb = outv.borrow_mut();
+            let s = std::str::from_utf8(&outb).unwrap();
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, "1 ");
+            outb.clear();
+        }
+
+        forth.capture_interpret("-1 U.", outv.clone()).unwrap();
+        {
+            let mut outb = outv.borrow_mut();
+            let s = std::str::from_utf8(&outb).unwrap();
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, format!("{} ", Word::INT_MASK));
+            outb.clear();
+        }
+
+        forth.capture_interpret("-100 U.", outv.clone()).unwrap();
+        {
+            let mut outb = outv.borrow_mut();
+            let s = std::str::from_utf8(&outb).unwrap();
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, format!("{} ", Word::INT_MASK-99));
+            outb.clear();
+        }
+
+        forth.capture_interpret("DECIMAL 20 HEX U.", outv.clone()).unwrap();
+        {
+            let mut outb = outv.borrow_mut();
+            let s = std::str::from_utf8(&outb).unwrap();
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, "14 ");
+            outb.clear();
+        }
+
+        forth.capture_interpret("23 5 U.R", outv.clone()).unwrap();
+        {
+            let mut outb = outv.borrow_mut();
+            let s = std::str::from_utf8(&outb).unwrap();
+            eprintln!("output is\n{}", s);
+            assert_eq!(s, "   23");
+            outb.clear();
+        }
     }
 
     #[test]
