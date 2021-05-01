@@ -6795,10 +6795,8 @@ VARIABLE c-addr2
 ").unwrap();
 
         let char_here = forth.char_here();
-
-        let here = forth.here();
         {
-            forth.interpret("100 CALLOT c-addr1 ! c-addr1 @");
+            forth.interpret("100 CALLOT c-addr1 ! c-addr1 @").unwrap();
             assert_eq!(forth.stack_depth(), 1);
             let st = forth.pop_str().unwrap();
             assert!(matches!(st, ST::Allocated(_)));
