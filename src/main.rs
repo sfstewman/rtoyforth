@@ -497,6 +497,8 @@ struct ToyForth<'tf> {
     strings: std::vec::Vec<u8>,
     code: Vec<Instr>,
 
+    pc: u32,
+
     runtime_does_func: u32,
     invalid_deferred_xt: XT,
     compile_comma_xt: XT,
@@ -775,6 +777,8 @@ impl<'tf> ToyForth<'tf> {
             vars:    std::vec::Vec::new(),
             strings: std::vec::Vec::new(),
             code:    std::vec::Vec::new(),
+
+            pc: 0,
 
             runtime_does_func: u32::MAX,
             invalid_deferred_xt: XT(0),
@@ -1638,7 +1642,7 @@ impl<'tf> ToyForth<'tf> {
                 let xt = self.pop_xt()?;
                 if wh == 1 || !is_compiling {
                     self.ret_push_bye()?;
-                    self.exec(xt)?;
+                    self.exec_at(xt)?;
                 } else {
                     self.add_instr(Instr::DoCol(xt));
                 }
@@ -2933,7 +2937,7 @@ impl<'tf> ToyForth<'tf> {
         } else {
             let xt = self.pop_xt()?;
             self.ret_push_bye()?;
-            self.exec(xt)?;
+            self.exec_at(xt)?;
         }
 
         Ok(())
@@ -4230,86 +4234,90 @@ impl<'tf> ToyForth<'tf> {
         self.dstack.pop().map(Word::kind)
     }
 
-    pub fn exec(&mut self, xt: XT) -> Result<(), ForthError> {
-        // TODO: bounds check
+    pub fn exec_at(&mut self, xt: XT) -> Result<(), ForthError> {
+        let prev_pc = self.pc;
+        self.pc = xt.0;
+        let ret = self.exec();
+        self.pc = prev_pc;
+        return ret;
+    }
 
-        let mut pc = xt.0;
-
+    pub fn exec(&mut self) -> Result<(), ForthError> {
         loop {
-            if pc as usize >= self.code.len() {
-                return Err(ForthError::InvalidPC(pc));
+            if self.pc as usize >= self.code.len() {
+                return Err(ForthError::InvalidPC(self.pc));
             }
-            let op = self.code[pc as usize];
+            let op = self.code[self.pc as usize];
 
             // eprintln!("pc = {}, code[pc] = {:?}", pc, op);
             match op {
                 Instr::Empty => {
-                    return Err(ForthError::InvalidCell(XT(pc)));
+                    return Err(ForthError::InvalidCell(XT(self.pc)));
                 },
                 Instr::Bye => {
                     return Ok(());
                 },
                 Instr::Push(w) => {
                     self.push(w)?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::Drop => {
                     self.drop()?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::Pick => {
                     let u = self.pop_uint()?;
                     self.pick(u as usize)?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::Roll => {
                     let u = self.pop_uint()?;
                     self.roll(u as usize)?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::Rot => {
                     self.roll(2)?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::Dup => {
                     self.dup()?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::Swap => {
                     self.swap()?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::Over => {
                     self.over()?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::Defer(xt) | Instr::Jump(xt) => {
-                    pc = xt.0;
+                    self.pc = xt.0;
                 },
                 Instr::Error(code) => {
                     return Err(ForthError::from_code(code));
                 },
                 Instr::Branch(delta) => {
                     if delta == 0 {
-                        return Err(ForthError::InvalidControlInstruction(xt));
+                        return Err(ForthError::InvalidControlInstruction(XT(self.pc)));
                     }
 
-                    let new_pc = (pc as i64) + (delta as i64);
+                    let new_pc = (self.pc as i64) + (delta as i64);
                     // FIXME: check range
-                    pc = new_pc as u32;
+                    self.pc = new_pc as u32;
                 },
                 Instr::BranchOnZero(delta) => {
                     if delta == 0 {
-                        return Err(ForthError::InvalidControlInstruction(xt));
+                        return Err(ForthError::InvalidControlInstruction(XT(self.pc)));
                     }
 
                     let arg = self.pop_int()?;
                     if arg == 0 {
-                        let new_pc = (pc as i64) + (delta as i64);
+                        let new_pc = (self.pc as i64) + (delta as i64);
                         // FIXME: check range
-                        pc = new_pc as u32;
+                        self.pc = new_pc as u32;
                     } else {
-                        pc += 1;
+                        self.pc += 1;
                     }
                 },
                 Instr::ControlIndexPush(count) => {
@@ -4329,7 +4337,7 @@ impl<'tf> ToyForth<'tf> {
                         }
                     }
 
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::ControlIndexDrop(count) => {
                     if count > 0 {
@@ -4342,7 +4350,7 @@ impl<'tf> ToyForth<'tf> {
                         self.cstack.truncate(clen-ccnt);
                     }
 
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::ControlIndexPeek(ind) => {
                     let clen = self.cstack.len();
@@ -4357,7 +4365,7 @@ impl<'tf> ToyForth<'tf> {
                         return Err(ForthError::InvalidControlEntry(entry));
                     }
 
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::ControlIteration{incr} => {
                     let delta = if incr { self.pop_int()? } else { 1 };
@@ -4382,32 +4390,32 @@ impl<'tf> ToyForth<'tf> {
                     self.cstack[clen-1] = ControlEntry::Index(next);
                     self.push(Word::bool(next == top))?;
 
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::ReturnPush => {
                     self.data_to_ret()?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::ReturnPop => {
                     self.ret_to_data()?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::ReturnCopy => {
                     self.ret_copy_to_data()?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::Execute => {
                     let xt = self.pop_xt()?;
-                    self.rstack.push(Word::xt(pc+1));
-                    pc = xt.0;
+                    self.rstack.push(Word::xt(self.pc+1));
+                    self.pc = xt.0;
                 },
                 Instr::UnaryOp(op) => {
                     self.unary_op(op)?;
-                    pc += 1;
+                    self.pc += 1;
                 },
                 Instr::BinaryOp(op) => {
                     self.binary_op(op)?;
-                    pc += 1;
+                    self.pc += 1;
                 },
 
                 Instr::Func(x) => {
@@ -4419,17 +4427,17 @@ impl<'tf> ToyForth<'tf> {
                     let fxn = self.ufuncs[ind].0;
 
                     fxn(self)?;
-                    pc += 1;
+                    self.pc += 1;
                 },
 
                 Instr::DoCol(new_pc) => {
-                    self.rstack.push(Word::xt(pc+1));
-                    pc = new_pc.0;
+                    self.rstack.push(Word::xt(self.pc+1));
+                    self.pc = new_pc.0;
                 },
                 Instr::Exit|Instr::Unnest => {
                     let val = self.rstack.pop().ok_or(ForthError::ReturnStackUnderflow)?;
                     let ret = val.to_xt().ok_or_else(|| ForthError::InvalidExecutionToken(val))?;
-                    pc = ret.0;
+                    self.pc = ret.0;
                 },
             }
         }
@@ -4577,7 +4585,7 @@ mod tests {
 
         let xt = forth.add_code(&code);
 
-        forth.exec(xt).unwrap();
+        forth.exec_at(xt).unwrap();
         assert_eq!(forth.pop().unwrap(), Word::int(-999));
         assert_eq!(forth.pop().unwrap(), Word::int(4314));
         assert_eq!(forth.pop(), None);
@@ -4597,7 +4605,7 @@ mod tests {
         ];
 
         let xt = forth.add_code(&code);
-        forth.exec(xt).unwrap();
+        forth.exec_at(xt).unwrap();
 
         assert_eq!(forth.pop().unwrap(), Word::int(-41820));
         assert_eq!(forth.pop(), None);
@@ -4624,7 +4632,7 @@ mod tests {
             Instr::Bye,
         ]);
 
-        forth.exec(xt1).unwrap();
+        forth.exec_at(xt1).unwrap();
         assert_eq!(forth.pop().unwrap(), Word::int(5));
         assert_eq!(forth.pop(), None);
     }
