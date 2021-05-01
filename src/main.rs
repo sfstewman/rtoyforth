@@ -839,6 +839,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("*/MOD", ToyForth::builtin_star_slash_mod);
         tf.add_func("FM/MOD", ToyForth::builtin_fm_slash_mod);
         tf.add_func("SM/REM", ToyForth::builtin_sm_slash_rem);
+        tf.add_func("UM/MOD", ToyForth::builtin_um_slash_mod);
 
         let (emit,_) = tf.add_func("EMIT", ToyForth::builtin_emit);
 
@@ -1135,6 +1136,10 @@ impl<'tf> ToyForth<'tf> {
         !
     THEN
 ; IMMEDIATE
+
+\\ Double cell stuff
+: S>D DUP 0< IF -1 ELSE 0 THEN ;
+: */ */MOD SWAP DROP ;
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
@@ -2190,6 +2195,14 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    fn pop_dbl_uint(&mut self) -> Result<u64, ForthError> {
+        let hi = self.pop_uint()?;
+        let lo = self.pop_uint()?;
+
+        let d = ((hi as u64) << 31) | (lo as u64);
+        return Ok(d);
+    }
+
     fn pop_dbl_int(&mut self) -> Result<i64, ForthError> {
         let hi = self.pop_int()?;
         let lo = self.pop_int()?;
@@ -2264,6 +2277,26 @@ impl<'tf> ToyForth<'tf> {
         let numer = self.pop_dbl_int()?;
 
         let (quot,rem) = ToyForth::double_div_single(numer, denom)?;
+        self.push_int(rem as i32)?;
+        self.push_int(quot as i32)?;
+        Ok(())
+    }
+
+    fn builtin_um_slash_mod(&mut self) -> Result<(), ForthError> {
+        let divisor  = self.pop_uint()?;
+        if divisor == 0 {
+            return Err(ForthError::DivisionByZero);
+        }
+
+        let dividend = self.pop_dbl_uint()?;
+
+        let quot : u64 = dividend / (divisor as u64);
+        if quot > (Word::INT_MASK as u64) {
+            return Err(ForthError::NumberOutOfRange);
+        }
+
+        let rem : u64 = dividend - (divisor as u64)*quot;
+
         self.push_int(rem as i32)?;
         self.push_int(quot as i32)?;
         Ok(())
@@ -2572,8 +2605,8 @@ impl<'tf> ToyForth<'tf> {
             },
 
             BinOp::UMStar => {
-                let ua = (a as u32);
-                let ub = (b as u32);
+                let ua = (a as u32) & Word::INT_MASK;
+                let ub = (b as u32) & Word::INT_MASK;
                 let um = (ua as u64).wrapping_mul(ub as u64);
                 let cell_mask = Word::INT_MASK as u64;
 
@@ -2581,7 +2614,7 @@ impl<'tf> ToyForth<'tf> {
                 let hi : u32 = (um >> Word::INT_BITS) as u32;
 
                 eprintln!("a = {}, b = {}, um = {}, lo = {}, hi = {}",
-                      (a as u64), (b as u64), um, lo, hi);
+                      (ua as u64), (ub as u64), um, lo, hi);
                 self.push(Word::int(lo as i32))?;
                 self.push(Word::int(hi as i32))?;
                 return Ok(());
@@ -2600,7 +2633,7 @@ impl<'tf> ToyForth<'tf> {
             },
             BinOp::RightShift => {
                 // TODO: check b for range
-                let ub = (b as u32);
+                let ub = b as u32;
 
                 // ua requires some care.  -1 is all-bits-set, and has 31 bits in the native type.
                 // 
@@ -6413,6 +6446,107 @@ st1 @ @
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), ' ' as i32);
         assert_eq!(forth.pop_int().unwrap(), ' ' as i32);
+    }
+
+    #[test]
+    fn double_cell_operations() {
+        let mut forth = ToyForth::new();
+
+        forth.interpret("1 S>D").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret("-1 S>D").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+
+        forth.interpret("100000 100000 100 */MOD").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 100_000_000);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+
+        forth.interpret("1 1 M*").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret("-1 1 M*").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+
+        forth.interpret("1 -1 M*").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+
+        forth.interpret("-1 -1 M*").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 0);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+
+        forth.interpret("100000 100000 M*").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 4);
+        assert_eq!(forth.pop_int().unwrap(), -737418240);
+
+        forth.interpret("-1 -1 UM*").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -2);
+        assert_eq!(forth.pop_int().unwrap(),  1);
+
+        forth.interpret("100000 100000 UM*").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 4);
+        assert_eq!(forth.pop_int().unwrap(), -737418240);
+
+        forth.interpret("10 S>D 7 FM/MOD").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+
+        forth.interpret("-10 S>D 7 FM/MOD").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -2);
+        assert_eq!(forth.pop_int().unwrap(),  4);
+
+        forth.interpret("10 S>D -7 FM/MOD").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -2);
+        assert_eq!(forth.pop_int().unwrap(), -4);
+
+        forth.interpret("-10 S>D -7 FM/MOD").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(),  1);
+        assert_eq!(forth.pop_int().unwrap(), -3);
+
+        forth.interpret("10 S>D 7 SM/REM").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), 1);
+        assert_eq!(forth.pop_int().unwrap(), 3);
+
+        forth.interpret("-10 S>D 7 SM/REM").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+        assert_eq!(forth.pop_int().unwrap(), -3);
+
+        forth.interpret("10 S>D -7 SM/REM").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(), -1);
+        assert_eq!(forth.pop_int().unwrap(),  3);
+
+        forth.interpret("-10 S>D -7 SM/REM").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(),  1);
+        assert_eq!(forth.pop_int().unwrap(), -3);
+
+        // FIXME: need better UM/MOD tests
+        forth.interpret("10 S>D 7 UM/MOD").unwrap();
+        assert_eq!(forth.stack_depth(), 2);
+        assert_eq!(forth.pop_int().unwrap(),  1);
+        assert_eq!(forth.pop_int().unwrap(),  3);
     }
 }
 
