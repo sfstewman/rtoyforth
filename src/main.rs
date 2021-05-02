@@ -1629,8 +1629,6 @@ impl<'tf> ToyForth<'tf> {
                 self.swap()?;                   // ( caddr neg? -- neg? caddr )   r: ( u -- u )
                 self.over()?;                   // ( neg? caddr -- neg? caddr neg? ) r: ( u -- u )
 
-                // self.print_stacks("-1-");
-
                 if self.pop_int()? != 0 {       // ( neg? caddr neg? -- neg? caddr ) r: ( u -- u )
                     self.builtin_char_plus()?;  // ( neg? caddr -- neg? caddr2 )
                     self.ret_to_data()?; // ( neg? caddr2 -- neg? caddr2 u ) r: ( u -- )
@@ -1640,7 +1638,6 @@ impl<'tf> ToyForth<'tf> {
                     len -= 1;
 
                     self.data_to_ret()?;    // ( neg? caddr2 u2 -- neg? caddr2 )  r: ( -- u2 )
-                    // self.print_stacks("-2-");
                 }
 
                 self.push_int(0)?;              // ( neg? caddr -- neg? caddr 0 ) r: ( u -- u )
@@ -1648,9 +1645,7 @@ impl<'tf> ToyForth<'tf> {
 
                 self.ret_to_data()?;    // ( neg? 0 caddr -- neg? 0 caddr u ) r: ( u -- )
 
-                // self.print_stacks("-3-");
                 self.builtin_to_number()?;      // ( neg? 0 caddr u1 -- neg? ud caddr u2 )
-                // self.print_stacks("-4-");
 
                 let consumed = self.pop_int()?; // ( neg? ud caddr u2 -- neg? ud caddr )
 
