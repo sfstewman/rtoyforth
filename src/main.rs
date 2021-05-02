@@ -460,7 +460,8 @@ enum ControlEntry {
 #[derive(Debug,Clone,Copy)]
 struct DictEntry {
     st: ST,
-    xt: XT,
+    entry: XT,
+    end: XT,
     flags: u32,
 }
 
@@ -1297,7 +1298,7 @@ impl<'tf> ToyForth<'tf> {
         let mut xt_map = HashMap::<u32,&str>::with_capacity(self.dict.len());
         for ent in &self.dict {
             let w = self.string_at(ent.st);
-            xt_map.insert(ent.xt.0, w);
+            xt_map.insert(ent.entry.0, w);
         };
 
         for (i,instr) in self.code[xt.0 as usize..].iter().enumerate() {
@@ -1817,7 +1818,8 @@ impl<'tf> ToyForth<'tf> {
 
         self.dict.push(DictEntry{
             st: st,
-            xt: xt,
+            entry: xt,
+            end: self.mark_code(),
             flags: DictEntry::PRIMITIVE,
         });
 
@@ -1856,13 +1858,15 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn add_word(&mut self, word: &str, code: &[Instr], flags: u32) -> Result<XT,ForthError> {
-        let xt = self.mark_code();
+        let entry = self.mark_code();
         for instr in code {
             self.add_instr(*instr);
         }
 
-        self.define_word(word,xt,flags)?;
-        Ok(xt)
+        let end = self.mark_code();
+
+        self.define_word(word,entry,end,flags)?;
+        Ok(entry)
     }
 
     pub fn allocate_string(&mut self, st: ST) -> Result<ST,ForthError> {
@@ -1872,12 +1876,13 @@ impl<'tf> ToyForth<'tf> {
         self.add_string(&s)
     }
 
-    pub fn define_word(&mut self, word: &str, xt: XT, flags: u32) -> Result<ST,ForthError> {
+    pub fn define_word(&mut self, word: &str, entry: XT, end: XT, flags: u32) -> Result<ST,ForthError> {
         let st = self.add_string(word)?;
 
         self.dict.push(DictEntry{
             st: st,
-            xt: xt,
+            entry: entry,
+            end: end,
             flags: flags,
         });
 
@@ -1885,7 +1890,18 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn lookup_dict_entry(&self, word: &str) -> Result<DictEntry, ForthError> {
+        // FIXME: use hash map for fast lookup
+
+        if word.len() == 0 {
+            return Err(ForthError::StringNotFound);
+        }
+
         for ent in self.dict.iter().rev() {
+            // skip :NONAME definitions
+            if ent.st == ST::null() {
+                continue;
+            }
+
             let entry_word = self.maybe_string_at(ent.st)?;
             if word.eq_ignore_ascii_case(entry_word) {
                 return Ok(*ent);
@@ -1899,7 +1915,7 @@ impl<'tf> ToyForth<'tf> {
         for ent in self.dict.iter().rev() {
             let entry_word = self.maybe_string_at(ent.st)?;
             if word.eq_ignore_ascii_case(entry_word) {
-                return Ok(ent.xt);
+                return Ok(ent.entry);
             }
         }
 
@@ -2458,7 +2474,7 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::NotDeferredFunction);
         }
 
-        let deferred_xt = entry.xt;
+        let deferred_xt = entry.entry;
 
         if self.compiling() {
             let defer_at_xt = self.lookup_word("DEFER@")?;
@@ -2482,7 +2498,7 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::NotDeferredFunction);
         }
 
-        let deferred_xt = entry.xt;
+        let deferred_xt = entry.entry;
 
         if self.compiling() {
             let defer_bang_xt = self.lookup_word("DEFER!")?;
@@ -2766,7 +2782,7 @@ impl<'tf> ToyForth<'tf> {
 
         match self.lookup_dict_entry(s) {
             Ok(entry) => {
-                self.push(Word::from_xt(entry.xt))?;
+                self.push(Word::from_xt(entry.entry))?;
                 let wh = if (entry.flags & DictEntry::IMMEDIATE) != 0 { 1 } else { -1 };
                 self.push(Word::int(wh))?;
                 Ok(())
@@ -2798,7 +2814,7 @@ impl<'tf> ToyForth<'tf> {
 
         match self.lookup_dict_entry(s) {
             Ok(entry) => {
-                self.push(Word::from_xt(entry.xt))?;
+                self.push(Word::from_xt(entry.entry))?;
                 let wh = if (entry.flags & DictEntry::IMMEDIATE) != 0 { 1 } else { -1 };
                 self.push(Word::int(wh))?;
                 Ok(())
@@ -2942,9 +2958,9 @@ impl<'tf> ToyForth<'tf> {
         let ent = self.lookup_dict_entry(s)?;
 
         if ent.is_immediate() {
-            self.add_instr(Instr::DoCol(ent.xt));
+            self.add_instr(Instr::DoCol(ent.entry));
         } else {
-            self.add_instr(Instr::Push(ent.xt.to_word()));
+            self.add_instr(Instr::Push(ent.entry.to_word()));
             self.add_instr(Instr::DoCol(self.compile_comma_xt));
         }
 
@@ -3274,7 +3290,7 @@ impl<'tf> ToyForth<'tf> {
         //
         // TODO: change dictionary entries to have the number of instructions
         //       to make this safer
-        let i0 = entry.xt.0 as usize;
+        let i0 = entry.entry.0 as usize;
         for i in i0..self.code.len() {
             match self.code[i] {
                 Instr::Unnest | Instr::Jump(_) => {
@@ -3411,14 +3427,25 @@ impl<'tf> ToyForth<'tf> {
         let xt = cxt.to_xt().ok_or(ForthError::ExpectedXT(cxt))?; // XXX: need better error
 
         if cdef != Word(0) {
-            let st = cdef.to_str().ok_or(ForthError::InvalidArgument(cdef))?; // XXX: need better error
+            let st = cdef.to_str().ok_or(ForthError::ExpectedString(cdef))?; // XXX: need better error
+            let end = self.mark_code();
 
             self.dict.push(DictEntry{
                 st: st,
-                xt: xt,
+                entry: xt,
+                end: end,
                 flags: 0,
             });
         } else {
+            let st = ST::null();
+            let end = self.mark_code();
+
+            self.dict.push(DictEntry{
+                st: st,
+                entry: xt,
+                end: end,
+                flags: 0,
+            });
             self.push(xt.to_word())?;
         }
 
@@ -4683,7 +4710,7 @@ mod tests {
         entries[3] = Instr::BinaryOp(BinOp::Plus);
         entries[4] = Instr::Unnest;
 
-        forth.define_word("my_func", xt, 0).unwrap();
+        forth.define_word("my_func", xt, forth.mark_code(), 0).unwrap();
 
         let lookup_xt = forth.lookup_word("my_func").unwrap();
         assert_eq!(xt, lookup_xt);
