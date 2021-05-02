@@ -944,6 +944,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("IMMEDIATE", ToyForth::builtin_immediate);
 
         tf.add_func("FIND", ToyForth::builtin_find);
+        tf.add_func("FIND-NAME", ToyForth::builtin_find_name);
 
         tf.add_func(">NUMBER", ToyForth::builtin_to_number);
 
