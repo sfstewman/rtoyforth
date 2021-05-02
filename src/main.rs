@@ -460,7 +460,7 @@ enum ControlEntry {
 #[derive(Debug,Clone,Copy)]
 struct DictEntry {
     st: ST,
-    entry: XT,
+    start: XT,
     end: XT,
     flags: u32,
 }
@@ -1298,7 +1298,7 @@ impl<'tf> ToyForth<'tf> {
         let mut xt_map = HashMap::<u32,&str>::with_capacity(self.dict.len());
         for ent in &self.dict {
             let w = self.string_at(ent.st);
-            xt_map.insert(ent.entry.0, w);
+            xt_map.insert(ent.start.0, w);
         };
 
         for (i,instr) in self.code[xt.0 as usize..].iter().enumerate() {
@@ -1818,7 +1818,7 @@ impl<'tf> ToyForth<'tf> {
 
         self.dict.push(DictEntry{
             st: st,
-            entry: xt,
+            start: xt,
             end: self.mark_code(),
             flags: DictEntry::PRIMITIVE,
         });
@@ -1881,7 +1881,7 @@ impl<'tf> ToyForth<'tf> {
 
         self.dict.push(DictEntry{
             st: st,
-            entry: entry,
+            start: entry,
             end: end,
             flags: flags,
         });
@@ -1915,7 +1915,7 @@ impl<'tf> ToyForth<'tf> {
         for ent in self.dict.iter().rev() {
             let entry_word = self.maybe_string_at(ent.st)?;
             if word.eq_ignore_ascii_case(entry_word) {
-                return Ok(ent.entry);
+                return Ok(ent.start);
             }
         }
 
@@ -2474,7 +2474,7 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::NotDeferredFunction);
         }
 
-        let deferred_xt = entry.entry;
+        let deferred_xt = entry.start;
 
         if self.compiling() {
             let defer_at_xt = self.lookup_word("DEFER@")?;
@@ -2498,7 +2498,7 @@ impl<'tf> ToyForth<'tf> {
             return Err(ForthError::NotDeferredFunction);
         }
 
-        let deferred_xt = entry.entry;
+        let deferred_xt = entry.start;
 
         if self.compiling() {
             let defer_bang_xt = self.lookup_word("DEFER!")?;
@@ -2782,7 +2782,7 @@ impl<'tf> ToyForth<'tf> {
 
         match self.lookup_dict_entry(s) {
             Ok(entry) => {
-                self.push(Word::from_xt(entry.entry))?;
+                self.push(Word::from_xt(entry.start))?;
                 let wh = if (entry.flags & DictEntry::IMMEDIATE) != 0 { 1 } else { -1 };
                 self.push(Word::int(wh))?;
                 Ok(())
@@ -2814,7 +2814,7 @@ impl<'tf> ToyForth<'tf> {
 
         match self.lookup_dict_entry(s) {
             Ok(entry) => {
-                self.push(Word::from_xt(entry.entry))?;
+                self.push(Word::from_xt(entry.start))?;
                 let wh = if (entry.flags & DictEntry::IMMEDIATE) != 0 { 1 } else { -1 };
                 self.push(Word::int(wh))?;
                 Ok(())
@@ -2958,9 +2958,9 @@ impl<'tf> ToyForth<'tf> {
         let ent = self.lookup_dict_entry(s)?;
 
         if ent.is_immediate() {
-            self.add_instr(Instr::DoCol(ent.entry));
+            self.add_instr(Instr::DoCol(ent.start));
         } else {
-            self.add_instr(Instr::Push(ent.entry.to_word()));
+            self.add_instr(Instr::Push(ent.start.to_word()));
             self.add_instr(Instr::DoCol(self.compile_comma_xt));
         }
 
@@ -3290,7 +3290,7 @@ impl<'tf> ToyForth<'tf> {
         //
         // TODO: change dictionary entries to have the number of instructions
         //       to make this safer
-        let i0 = entry.entry.0 as usize;
+        let i0 = entry.start.0 as usize;
         for i in i0..self.code.len() {
             match self.code[i] {
                 Instr::Unnest | Instr::Jump(_) => {
@@ -3432,7 +3432,7 @@ impl<'tf> ToyForth<'tf> {
 
             self.dict.push(DictEntry{
                 st: st,
-                entry: xt,
+                start: xt,
                 end: end,
                 flags: 0,
             });
@@ -3442,7 +3442,7 @@ impl<'tf> ToyForth<'tf> {
 
             self.dict.push(DictEntry{
                 st: st,
-                entry: xt,
+                start: xt,
                 end: end,
                 flags: 0,
             });
