@@ -1336,6 +1336,8 @@ impl<'tf> ToyForth<'tf> {
                     };
 
                     eprintln!("[{:3}] [xt] {:24} | {}", ind, xt.0, name);
+
+                    self.print_code_with_highlight(entry.start, 2, true, xt.0, false);
                 },
                 None => {
                     eprintln!("[{:3}] [xt] {:24} | <unknown entry>", ind, xt.0);
@@ -1347,6 +1349,10 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn print_code(&self, xt: XT) {
+        self.print_code_with_highlight(xt, 0, false, 0, false);
+    }
+
+    pub fn print_code_with_highlight(&self, xt: XT, indent: usize, highlight: bool, highlight_xt: u32, rel_xt: bool) {
         use std::collections::HashMap;
 
         let mut xt_map = HashMap::<u32,&str>::with_capacity(self.dict.len());
@@ -1355,22 +1361,28 @@ impl<'tf> ToyForth<'tf> {
             xt_map.insert(ent.start.0, w);
         };
 
+        let indent_str = " ".repeat(4*indent);
+        let highlight_i = if highlight_xt > xt.0 { (highlight_xt - xt.0) as usize } else { 0 };
+
         for (i,instr) in self.code[xt.0 as usize..].iter().enumerate() {
             let istr = format!("{:?}", instr);
+            let highlight_str = if highlight && i == highlight_i { " <----" } else { "" };
+            let ind = if rel_xt { i } else { i+(xt.0 as usize) };
+
             match instr {
                 Instr::Push(w) => {
                     if let WordKind::Int(n) = w.kind() {
-                        eprintln!("[{:3}] {:40}  | Push([int] {})", i, istr, n);
+                        eprintln!("{}[{:3}] {:40} {:6} | Push([int] {})", &indent_str, ind, istr, highlight_str, n);
                     } else {
-                        eprintln!("[{:3}] {:40}  | Push({})", i, istr, w);
+                        eprintln!("{}[{:3}] {:40} {:6} | Push({})", &indent_str, ind, istr, highlight_str, w);
                     }
                 }
                 Instr::DoCol(xt) => {
                     let name = xt_map[&xt.0];
-                    eprintln!("[{:3}] {:40}  | {}", i, istr, name);
+                    eprintln!("{}[{:3}] {:40} {:6} | {}", &indent_str, ind, istr, highlight_str, name);
                 },
                 _ => {
-                    eprintln!("[{:3}] {:40}", i, istr);
+                    eprintln!("{}[{:3}] {:40} {:6}", &indent_str, ind, istr, highlight_str);
                 }
             };
 
