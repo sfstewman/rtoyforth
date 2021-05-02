@@ -332,7 +332,7 @@ impl Word {
             return Ok(x as u8);
         }
 
-        return Err(ForthError::InvalidArgument(self));
+        return Err(ForthError::ExpectedInteger(self));
     }
 }
 
@@ -574,6 +574,12 @@ enum ForthError {
     InvalidFunction(u32),
     InvalidPC(u32),
 
+    ExpectedXT(Word),
+    ExpectedString(Word),
+    ExpectedInteger(Word),
+    ExpectedVarAddr(Word),
+    ExpectedAddr(Word),
+
     IOError(std::io::Error),
 }
 
@@ -626,7 +632,14 @@ impl ForthError {
     const INVALID_STRING_VALUE              : u32 = 142;
     const INVALID_FUNCTION                  : u32 = 143;
     const INVALID_PC                        : u32 = 144;
-    const IO_ERROR                          : u32 = 145;
+
+    const EXPECTED_XT                       : u32 = 145;
+    const EXPECTED_STRING                   : u32 = 146;
+    const EXPECTED_INTEGER                  : u32 = 147;
+    const EXPECTED_VARADDR                  : u32 = 148;
+    const EXPECTED_ADDR                     : u32 = 149;
+
+    const IO_ERROR                          : u32 = 150;
 
     fn from_code(code: u32) -> ForthError {
         match code {
@@ -734,6 +747,12 @@ impl ForthError {
             ForthError::InvalidStringValue(_)			=> ForthError::INVALID_STRING_VALUE,
             ForthError::InvalidFunction(_)				=> ForthError::INVALID_FUNCTION,
             ForthError::InvalidPC(_)				    => ForthError::INVALID_PC,
+
+            ForthError::ExpectedXT(_)                   => ForthError::EXPECTED_XT,
+            ForthError::ExpectedString(_)               => ForthError::EXPECTED_STRING,
+            ForthError::ExpectedInteger(_)              => ForthError::EXPECTED_INTEGER,
+            ForthError::ExpectedVarAddr(_)              => ForthError::EXPECTED_VARADDR,
+            ForthError::ExpectedAddr(_)                 => ForthError::EXPECTED_ADDR,
 
             ForthError::IOError(_)			            => ForthError::IO_ERROR,
         }
@@ -1483,6 +1502,21 @@ impl<'tf> ToyForth<'tf> {
                 },
                 ForthError::InvalidArgument(w) => {
                     eprintln!("Invalid argument: {}", w);
+                },
+                ForthError::ExpectedXT(w) => {
+                    eprintln!("Expected XT but found: {}", w);
+                },
+                ForthError::ExpectedString(w) => {
+                    eprintln!("Expected string but found: {}", w);
+                },
+                ForthError::ExpectedInteger(w) => {
+                    eprintln!("Expected integer but found: {}", w);
+                },
+                ForthError::ExpectedVarAddr(w) => {
+                    eprintln!("Expected var address but found: {}", w);
+                },
+                ForthError::ExpectedAddr(w) => {
+                    eprintln!("Expected address (var or char) but found: {}", w);
                 },
                 ForthError::InvalidCell(xt) => {
                     eprintln!("Invalid cell at xt = {}", xt.0);
@@ -2612,6 +2646,7 @@ impl<'tf> ToyForth<'tf> {
                         Word::bool( (a as u32) > (b as u32) )
                     },
                     _ => {
+                        // XXX: need a better error!
                         return Err(ForthError::InvalidArgument(aw));
                     }
                 };
@@ -2628,6 +2663,7 @@ impl<'tf> ToyForth<'tf> {
                         Word::bool( (a as u32) < (b as u32) )
                     },
                     _ => {
+                        // XXX: need a better error!
                         return Err(ForthError::InvalidArgument(aw));
                     }
                 };
@@ -2640,8 +2676,8 @@ impl<'tf> ToyForth<'tf> {
             _ => {},
         }
 
-        let b = bw.to_int().ok_or(ForthError::InvalidArgument(bw))?;
-        let a = aw.to_int().ok_or(ForthError::InvalidArgument(aw))?;
+        let b = bw.to_int().ok_or(ForthError::ExpectedInteger(bw))?;
+        let a = aw.to_int().ok_or(ForthError::ExpectedInteger(aw))?;
 
         // eprintln!("op = {:?}, a={}, b={}", op, a,b);
         let result: Word = match op {
@@ -2871,7 +2907,7 @@ impl<'tf> ToyForth<'tf> {
         self.check_compiling()?;
 
         let cxt = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?;
-        let xt = cxt.to_xt().ok_or(ForthError::InvalidArgument(cxt))?; // XXX: need better error
+        let xt = cxt.to_xt().ok_or(ForthError::ExpectedXT(cxt))?; // XXX: need better error
         self.add_instr(Instr::DoCol(xt));
         Ok(())
     }
@@ -2970,7 +3006,7 @@ impl<'tf> ToyForth<'tf> {
 
             return Err(ForthError::InvalidChar(v));
         } else {
-            return Err(ForthError::InvalidArgument(w));
+            return Err(ForthError::ExpectedInteger(w));
         }
     }
 
@@ -3376,7 +3412,7 @@ impl<'tf> ToyForth<'tf> {
 
         let cdef = self.get_var_at(ToyForth::ADDR_SLASH_CDEF)?;
         let cxt  = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?;
-        let xt = cxt.to_xt().ok_or(ForthError::InvalidArgument(cxt))?; // XXX: need better error
+        let xt = cxt.to_xt().ok_or(ForthError::ExpectedXT(cxt))?; // XXX: need better error
 
         if cdef != Word(0) {
             let st = cdef.to_str().ok_or(ForthError::InvalidArgument(cdef))?; // XXX: need better error
@@ -4172,7 +4208,7 @@ impl<'tf> ToyForth<'tf> {
         if let WordKind::Str(st) = w.kind() {
             Ok(st)
         } else {
-            Err(ForthError::InvalidArgument(w))
+            Err(ForthError::ExpectedString(w))
         }
     }
 
@@ -4181,7 +4217,7 @@ impl<'tf> ToyForth<'tf> {
         if let WordKind::Int(x) = w.kind() {
             Ok(x)
         } else {
-            Err(ForthError::InvalidArgument(w))
+            Err(ForthError::ExpectedInteger(w))
         }
     }
 
@@ -4195,7 +4231,7 @@ impl<'tf> ToyForth<'tf> {
         if let WordKind::Str(st) = w.kind() {
             Ok(st)
         } else {
-            Err(ForthError::InvalidArgument(w))
+            Err(ForthError::ExpectedString(w))
         }
     }
 
@@ -4204,7 +4240,7 @@ impl<'tf> ToyForth<'tf> {
         if let WordKind::XT(xt) = w.kind() {
             Ok(xt)
         } else {
-            Err(ForthError::InvalidArgument(w))
+            Err(ForthError::ExpectedXT(w))
         }
     }
 
@@ -4217,7 +4253,7 @@ impl<'tf> ToyForth<'tf> {
             WordKind::Str(c_addr) => {
                 Ok(Addr::Char(c_addr))
             },
-            _ => Err(ForthError::InvalidArgument(w)),
+            _ => Err(ForthError::ExpectedAddr(w)),
         }
     }
 
@@ -4226,7 +4262,7 @@ impl<'tf> ToyForth<'tf> {
         if let WordKind::VarAddr(addr) = w.kind() {
             Ok(addr)
         } else {
-            Err(ForthError::InvalidArgument(w))
+            Err(ForthError::ExpectedVarAddr(w))
         }
     }
 
