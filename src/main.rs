@@ -1292,6 +1292,60 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    pub fn print_backtrace(&self) {
+        // build xt -> dict entry
+        use std::collections::BTreeMap;
+
+        let mut xt_map = BTreeMap::<u32,usize>::new();
+        for (ind,ent) in self.dict.iter().enumerate() {
+            xt_map.insert(ent.start.0, ind);
+        }
+
+        let rstack = {
+            let mut rstack : Vec<XT> = self.rstack.iter().filter_map(|w| w.to_xt()).collect();
+
+            // first stack frame is pc
+            rstack.push(XT(self.pc));
+            rstack
+        };
+
+        let find_entry = |xt: XT| -> Option<&DictEntry> {
+            let mut it = xt_map.range(0..xt.0+1);
+            let (_,ind) = it.next_back()?;
+
+            let entry = &self.dict[*ind];
+            if entry.start.0 <= xt.0 && entry.end.0 > xt.0 {
+                return Some(entry);
+            }
+
+            None
+        };
+
+        eprintln!("Backtrace:");
+
+        // then proceed through return stack
+        // FIXME: add an aux stack for return stack manip words
+        //        currently we ignore non-XT values
+        for (ind,xt) in rstack.iter().rev().enumerate() {
+            match find_entry(*xt) {
+                Some(entry) => {
+                    let name = if entry.st != ST::null() {
+                        self.maybe_string_at(entry.st).unwrap_or("<invalid name>")
+                    } else {
+                        "<NONAME>"
+                    };
+
+                    eprintln!("[{:3}] [xt] {:24} | {}", ind, xt.0, name);
+                },
+                None => {
+                    eprintln!("[{:3}] [xt] {:24} | <unknown entry>", ind, xt.0);
+                },
+            }
+        }
+
+        eprintln!("\n");
+    }
+
     pub fn print_code(&self, xt: XT) {
         use std::collections::HashMap;
 
@@ -1589,6 +1643,8 @@ impl<'tf> ToyForth<'tf> {
                     "".to_string()
                 };
                 eprintln!("Parsed:{}{}", pfx,sfx);
+
+                self.print_backtrace();
 
                 self.print_stacks("--[ STACKS ]--");
                 // TODO: backtrace the stacks
@@ -4297,7 +4353,9 @@ impl<'tf> ToyForth<'tf> {
         let prev_pc = self.pc;
         self.pc = xt.0;
         let ret = self.exec();
-        self.pc = prev_pc;
+        if ret.is_ok() {
+            self.pc = prev_pc;
+        }
         return ret;
     }
 
