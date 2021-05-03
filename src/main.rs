@@ -1327,6 +1327,7 @@ impl<'tf> ToyForth<'tf> {
         // FIXME: add an aux stack for return stack manip words
         //        currently we ignore non-XT values
         for (ind,xt) in rstack.iter().rev().enumerate() {
+            let xt_pc = if ind == 0 || xt.0 == 0 { xt.0 } else { xt.0 - 1 };
             match find_entry(*xt) {
                 Some(entry) => {
                     let name = if entry.st != ST::null() {
@@ -1335,12 +1336,16 @@ impl<'tf> ToyForth<'tf> {
                         "<NONAME>"
                     };
 
-                    eprintln!("[{:3}] [xt] {:24} | {}", ind, xt.0, name);
+                    eprintln!("[{:5}] [xt] {:24} | {}", ind, xt.0, name);
 
-                    self.print_code_with_highlight(entry.start, 2, true, xt.0, false);
+                    self.print_code_with_highlight(entry.start, 2, true, xt_pc, false);
                 },
                 None => {
-                    eprintln!("[{:3}] [xt] {:24} | <unknown entry>", ind, xt.0);
+                    eprintln!("[{:5}] [xt] {:24} | <unknown entry>", ind, xt.0);
+
+                    if (xt_pc as usize) < self.code.len() {
+                        self.print_code_with_highlight(*xt, 2, true, xt_pc, false);
+                    }
                 },
             }
         }
@@ -1367,24 +1372,36 @@ impl<'tf> ToyForth<'tf> {
         for (i,instr) in self.code[xt.0 as usize..].iter().enumerate() {
             let istr = format!("{:?}", instr);
             let highlight_str = if highlight && i == highlight_i { " <----" } else { "" };
+            let highlight_char = if highlight && i == highlight_i { "*" } else { " " };
             let ind = if rel_xt { i } else { i+(xt.0 as usize) };
 
+            if highlight && i == highlight_i {
+                // eprintln!("{}vvvvvvvv", &indent_str);
+                // eprintln!("");
+            }
             match instr {
                 Instr::Push(w) => {
                     if let WordKind::Int(n) = w.kind() {
-                        eprintln!("{}[{:3}] {:40} {:6} | Push([int] {})", &indent_str, ind, istr, highlight_str, n);
+                        eprintln!("{}[{:5}{}] {:40} {:6} | Push([int] {})",
+                            &indent_str, ind, highlight_char, istr, highlight_str, n);
                     } else {
-                        eprintln!("{}[{:3}] {:40} {:6} | Push({})", &indent_str, ind, istr, highlight_str, w);
+                        eprintln!("{}[{:5}{}] {:40} {:6} | Push({})",
+                            &indent_str, ind, highlight_char, istr, highlight_str, w);
                     }
                 }
                 Instr::DoCol(xt) => {
                     let name = xt_map[&xt.0];
-                    eprintln!("{}[{:3}] {:40} {:6} | {}", &indent_str, ind, istr, highlight_str, name);
+                    eprintln!("{}[{:5}{}] {:40} {:6} | {}",
+                        &indent_str, ind, highlight_char, istr, highlight_str, name);
                 },
                 _ => {
-                    eprintln!("{}[{:3}] {:40} {:6}", &indent_str, ind, istr, highlight_str);
+                    eprintln!("{}[{:5}{}] {:40} {:6}",
+                        &indent_str, ind, highlight_char, istr, highlight_str);
                 }
             };
+            if highlight && i == highlight_i {
+                eprintln!("{}^^^^^^^^", &indent_str);
+            }
 
             if let Instr::Unnest = *instr {
                 break
