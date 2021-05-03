@@ -575,6 +575,8 @@ enum ForthError {
     InvalidFunction(u32),
     InvalidPC(u32),
 
+    InvalidErrorCode(u32),
+
     ExpectedXT(Word),
     ExpectedString(Word),
     ExpectedInteger(Word),
@@ -633,17 +635,17 @@ impl ForthError {
     const INVALID_STRING_VALUE              : u32 = 142;
     const INVALID_FUNCTION                  : u32 = 143;
     const INVALID_PC                        : u32 = 144;
+    const INVALID_ERROR_CODE                : u32 = 145;
+    const EXPECTED_XT                       : u32 = 146;
+    const EXPECTED_STRING                   : u32 = 147;
+    const EXPECTED_INTEGER                  : u32 = 148;
+    const EXPECTED_VARADDR                  : u32 = 149;
+    const EXPECTED_ADDR                     : u32 = 150;
 
-    const EXPECTED_XT                       : u32 = 145;
-    const EXPECTED_STRING                   : u32 = 146;
-    const EXPECTED_INTEGER                  : u32 = 147;
-    const EXPECTED_VARADDR                  : u32 = 148;
-    const EXPECTED_ADDR                     : u32 = 149;
+    const IO_ERROR                          : u32 = 151;
 
-    const IO_ERROR                          : u32 = 150;
-
-    fn from_code(code: u32) -> ForthError {
-        match code {
+    fn from_code(code: u32, arg: Word) -> Result<ForthError,ForthError> {
+        let err = match code {
             ForthError::STACK_UNDERFLOW                 => ForthError::StackUnderflow,
             ForthError::CONTROL_STACK_UNDERFLOW         => ForthError::ControlStackUnderflow,
             ForthError::RETURN_STACK_UNDERFLOW          => ForthError::ReturnStackUnderflow,
@@ -682,13 +684,72 @@ impl ForthError {
 
             ForthError::NOT_IMPLEMENTED                 => ForthError::NotImplemented,
 
-            // errors with state that we should be able to convert (not exhaustive):
-            // ForthError::INVALID_ARGUMENT             => ForthError::InvalidArgument(word),
-            // ForthError::INVALID_ESCAPE               => ForthError::InvalidEscape(esc_char),
+            ForthError::INVALID_ARGUMENT                => ForthError::InvalidArgument(arg),
+            ForthError::WORD_NOT_FOUND                  => {
+                let st = arg.to_str().ok_or(ForthError::InvalidArgument(arg))?;
+                ForthError::WordNotFound(st)
+            },
+            ForthError::INVALID_CELL                    => {
+                let xt = arg.to_xt().ok_or(ForthError::InvalidArgument(arg))?;
+                ForthError::InvalidCell(xt)
+            },
 
-            // FIXME: this isn't great...
-            _ => { panic!("cannot convert code to error"); }
-        }
+            // ForthError::INVALID_CONTROL_ENTRY           => ForthError::InvalidControlEntry(_),
+
+            ForthError::INVALID_INDEX                   => ForthError::InvalidIndex(arg),
+            ForthError::INVALID_CONTROL_INSTRUCTION     => {
+                let xt = arg.to_xt().ok_or(ForthError::InvalidArgument(arg))?;
+                ForthError::InvalidControlInstruction(xt)
+            },
+            ForthError::INVALID_EXECUTION_TOKEN         => ForthError::InvalidExecutionToken(arg),
+            ForthError::INVALID_STRING                  => {
+                let st = arg.to_str().ok_or(ForthError::InvalidArgument(arg))?;
+                ForthError::InvalidString(st)
+            },
+            ForthError::INVALID_ESCAPE                  => {
+                let n = arg.to_int().ok_or(ForthError::InvalidArgument(arg))?;
+                if n < 0 || n > 255 {
+                    return Err(ForthError::InvalidArgument(arg));
+                }
+                let b = n as u8;
+                ForthError::InvalidEscape(b as char)
+            },
+            ForthError::INVALID_CHAR                    => {
+                let n = arg.to_int().ok_or(ForthError::InvalidArgument(arg))?;
+                ForthError::InvalidChar(n)
+            },
+            ForthError::INVALID_ADDRESS                 => {
+                let addr = arg.to_addr().ok_or(ForthError::InvalidArgument(arg))?;
+                ForthError::InvalidAddress(addr)
+            },
+            ForthError::INVALID_COUNTED_STRING          => {
+                let st = arg.to_str().ok_or(ForthError::InvalidArgument(arg))?;
+                ForthError::InvalidCountedString(st)
+            },
+            ForthError::INVALID_PC                      => {
+                let xt = arg.to_xt().ok_or(ForthError::InvalidArgument(arg))?;
+                ForthError::InvalidPC(xt.0)
+            },
+
+            ForthError::EXPECTED_XT                     => ForthError::ExpectedXT(arg),
+            ForthError::EXPECTED_STRING                 => ForthError::ExpectedString(arg),
+            ForthError::EXPECTED_INTEGER                => ForthError::ExpectedInteger(arg),
+            ForthError::EXPECTED_VARADDR                => ForthError::ExpectedVarAddr(arg),
+            ForthError::EXPECTED_ADDR                   => ForthError::ExpectedAddr(arg),
+
+            // errors that can't be triggered by user code (yet)
+            // ForthError::INVALID_ADDRESS_AND_OFFSET      => ForthError::InvalidAddressAndOffset(..),
+            // ForthError::INVALID_STRING_VALUE            => ForthError::InvalidStringValue(_),
+            // ForthError::INVALID_FUNCTION                => ForthError::InvalidFunction(_),
+            // ForthError::IO_ERROR                        => ForthError::IOError(_),
+            // ForthError::INVALID_ERROR_CODE              => ForthError::InvalidErrorCode(_),
+
+            _ => {
+                return Err(ForthError::InvalidErrorCode(code));
+            }
+        };
+
+        Ok(err)
     }
 
     fn code(&self) -> u32 {
@@ -748,6 +809,8 @@ impl ForthError {
             ForthError::InvalidStringValue(_)			=> ForthError::INVALID_STRING_VALUE,
             ForthError::InvalidFunction(_)				=> ForthError::INVALID_FUNCTION,
             ForthError::InvalidPC(_)				    => ForthError::INVALID_PC,
+
+            ForthError::InvalidErrorCode(_)             => ForthError::INVALID_ERROR_CODE,
 
             ForthError::ExpectedXT(_)                   => ForthError::EXPECTED_XT,
             ForthError::ExpectedString(_)               => ForthError::EXPECTED_STRING,
@@ -878,6 +941,8 @@ impl<'tf> ToyForth<'tf> {
 
         tf.compile_comma_xt = compile_comma_xt;
         tf.runtime_does_func = tf.add_anon_func(ToyForth::builtin_runtime_does).unwrap() as u32;
+
+        tf.add_immed("RAISE-ERROR", ToyForth::builtin_raise_error);
 
         tf.add_func("ABORT", ToyForth::builtin_abort);
 
@@ -1564,6 +1629,15 @@ impl<'tf> ToyForth<'tf> {
         self.set_var_at(ToyForth::ADDR_STATE,      Word::int(0)).unwrap();
         self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0)).unwrap();
         self.set_var_at(ToyForth::ADDR_SLASH_CXT,  Word(0)).unwrap();
+    }
+
+    pub fn builtin_raise_error(&mut self) -> Result<(), ForthError> {
+        self.check_compiling()?;
+
+        let code = self.pop_int()?;
+        self.add_instr(Instr::Error(code as u32));
+
+        Ok(())
     }
 
     pub fn builtin_abort(&mut self) -> Result<(), ForthError> {
@@ -4441,7 +4515,10 @@ impl<'tf> ToyForth<'tf> {
                     self.pc = xt.0;
                 },
                 Instr::Error(code) => {
-                    return Err(ForthError::from_code(code));
+                    let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+                    let err = ForthError::from_code(code, w)?;
+
+                    return Err(err);
                 },
                 Instr::Branch(delta) => {
                     if delta == 0 {
