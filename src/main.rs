@@ -817,14 +817,14 @@ impl<'tf> ToyForth<'tf> {
             out_stream: None,
         };
 
+        // set up standard dictionary
         // First word in dict (addr 0) always holds BYE
-        tf.add_instr(Instr::Bye);
+        tf.add_prim("BYE", Instr::Bye);
 
         tf.invalid_deferred_xt = tf.mark_code();
         tf.add_instr(Instr::Error(ForthError::DEFERRED_FUNCTION_NOT_SET));
+        tf.add_instr(Instr::Unnest);
 
-        // set up standard dictionary
-        tf.add_prim("BYE", Instr::Bye);
         tf.add_prim("DUP", Instr::Dup);
         tf.add_prim("DROP", Instr::Drop);
         tf.add_prim("SWAP", Instr::Swap);
