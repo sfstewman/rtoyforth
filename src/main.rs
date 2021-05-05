@@ -513,6 +513,8 @@ struct ToyForth<'tf> {
     last_input_off: usize,
     last_word: ST,
 
+    optimize: i32,
+
     // in_stream: Option<Rc<RefCell<(dyn std::io::BufRead)>>>,
     in_stream: Option<Rc<RefCell<(dyn LineReader)>>>,
     out_stream: Option<Rc<RefCell<(dyn std::io::Write)>>>,
@@ -574,6 +576,7 @@ enum ForthError {
     InvalidStringValue(u32),
     InvalidFunction(u32),
     InvalidPC(u32),
+    ReadOnlyAddress(Addr),
 
     InvalidErrorCode(u32),
 
@@ -635,14 +638,15 @@ impl ForthError {
     const INVALID_STRING_VALUE              : u32 = 142;
     const INVALID_FUNCTION                  : u32 = 143;
     const INVALID_PC                        : u32 = 144;
-    const INVALID_ERROR_CODE                : u32 = 145;
-    const EXPECTED_XT                       : u32 = 146;
-    const EXPECTED_STRING                   : u32 = 147;
-    const EXPECTED_INTEGER                  : u32 = 148;
-    const EXPECTED_VARADDR                  : u32 = 149;
-    const EXPECTED_ADDR                     : u32 = 150;
+    const READ_ONLY_ADDRESS                 : u32 = 145;
+    const INVALID_ERROR_CODE                : u32 = 146;
+    const EXPECTED_XT                       : u32 = 147;
+    const EXPECTED_STRING                   : u32 = 148;
+    const EXPECTED_INTEGER                  : u32 = 149;
+    const EXPECTED_VARADDR                  : u32 = 150;
 
-    const IO_ERROR                          : u32 = 151;
+    const EXPECTED_ADDR                     : u32 = 151;
+    const IO_ERROR                          : u32 = 152;
 
     fn from_code(code: u32, arg: Word) -> Result<ForthError,ForthError> {
         let err = match code {
@@ -809,6 +813,7 @@ impl ForthError {
             ForthError::InvalidStringValue(_)			=> ForthError::INVALID_STRING_VALUE,
             ForthError::InvalidFunction(_)				=> ForthError::INVALID_FUNCTION,
             ForthError::InvalidPC(_)				    => ForthError::INVALID_PC,
+            ForthError::ReadOnlyAddress(_)              => ForthError::READ_ONLY_ADDRESS,
 
             ForthError::InvalidErrorCode(_)             => ForthError::INVALID_ERROR_CODE,
 
@@ -848,6 +853,7 @@ impl<'tf> ToyForth<'tf> {
 
     // special variables
     const ADDR_IN     : VarAddr = VarAddr(VarAddr::BUILTIN | 0);
+    const ADDR_OPTIMIZE:    VarAddr = VarAddr(VarAddr::BUILTIN | 1);
 
     pub fn new() -> ToyForth<'tf> {
         let mut tf = ToyForth{
@@ -876,11 +882,18 @@ impl<'tf> ToyForth<'tf> {
             last_input_off: 0,
             last_word: ST::null(),
 
+            optimize: 1,
+
             in_stream: None,
             out_stream: None,
         };
 
+        //
         // set up standard dictionary
+        //
+
+        // define words
+
         // First word in dict (addr 0) always holds BYE
         tf.add_prim("BYE", Instr::Bye);
 
@@ -1074,6 +1087,7 @@ impl<'tf> ToyForth<'tf> {
 
         // Add builtins
         tf.add_prim(">IN",    Instr::Push(ToyForth::ADDR_IN.to_word()));
+        tf.add_prim("/OPTIMIZE", Instr::Push(ToyForth::ADDR_OPTIMIZE.to_word()));
 
         tf.add_func("DEPTH",  ToyForth::builtin_depth);
         tf.add_func("HERE",   ToyForth::builtin_here);
@@ -2704,6 +2718,7 @@ impl<'tf> ToyForth<'tf> {
         if (addr.0 & VarAddr::BUILTIN) != 0 {
             match addr {
                 ToyForth::ADDR_IN => { return Ok(Word::int(self.input_off as i32)) },
+                ToyForth::ADDR_OPTIMIZE => { return Ok(Word::int(self.optimize)) },
                 _ => { return Err(ForthError::InvalidAddress(addr)) }
             }
         } else {
@@ -2717,6 +2732,19 @@ impl<'tf> ToyForth<'tf> {
     }
 
     fn set_var_at(&mut self, addr: VarAddr, value: Word) -> Result<(), ForthError> {
+        if (addr.0 & VarAddr::BUILTIN) != 0 {
+            match addr {
+                ToyForth::ADDR_IN => { return Err(ForthError::ReadOnlyAddress(Addr::Var(addr))); },
+                ToyForth::ADDR_OPTIMIZE => {
+                    let val = value.to_int().ok_or(ForthError::ExpectedInteger(value))?;
+                    self.optimize = val;
+                },
+                _ => { return Err(ForthError::InvalidAddress(addr)) }
+            }
+
+            return Ok(());
+        }
+
         let ind = addr.0 as usize;
 
         if ind >= self.vars.len() {
