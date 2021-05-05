@@ -2120,6 +2120,90 @@ impl<'tf> ToyForth<'tf> {
         return XT(ind as u32);
     }
 
+    fn add_instr_optimize(&mut self, code: Instr) -> Option<XT> {
+        if self.optimize <= 0 {
+            return None;
+        }
+
+        if let Instr::DoCol(col_xt) = code {
+            let code_addr = col_xt.0 as usize;
+
+            if code_addr >= self.code.len() {
+                // can't look at the code, so we can't inline...
+                return None;
+            }
+
+            // see if we can inline
+            let mut code_to_inline : Vec<Instr> = Vec::new();
+
+            for instr in &self.code[code_addr..] {
+                match instr {
+                    Instr::Unnest => {
+                        break
+                    },
+
+                    // Instructions that we can 
+                    Instr::Bye |
+                        Instr::Push(_) |
+                        Instr::Drop |
+                        Instr::Pick |
+                        Instr::Roll |
+                        Instr::Rot |
+                        Instr::Dup |
+                        Instr::Swap |
+                        Instr::Over |
+                        Instr::BinaryOp(_) |
+                        Instr::UnaryOp(_) |
+                        Instr::Error(_) |
+                        Instr::Execute |
+                        Instr::Func(_) |
+                        Instr::DoCol(_) => {
+                            code_to_inline.push(*instr);
+                    },
+
+                    // instructions that we won't inline at the moment
+                    //
+                    // If the word (called by DoCol) has any of these, don't inline...
+                    Instr::Empty                // should not encounter this...
+                        | Instr::Exit           // need to be careful here and consider effects...
+
+                        | Instr::Branch(_)      // need to be careful about branching and study inlining
+                        | Instr::BranchOnZero(_) 
+
+                        | Instr::ControlIndexPush(_)   // avoid loops for now
+                        | Instr::ControlIndexDrop(_) 
+                        | Instr::ControlIteration{..} 
+                        | Instr::ControlIndexPeek(_) 
+
+                        | Instr::Defer(_)              // Defer and Jump can be changed dynamically and can't be
+                        | Instr::Jump(_)               // inlined during initial compilation.
+
+                        | Instr::ReturnPush            // Return* instructions should be inlineable, but 
+                        | Instr::ReturnPop             // need to ensure that they're well behaved!
+                        | Instr::ReturnCopy => {
+                            return None
+                    }
+                }
+            }
+
+            let xt = self.mark_code();
+
+            // arbitrary limit for now...
+            let inline_limit = 3;
+            if code_to_inline.len() > inline_limit {
+                return None;
+            }
+
+            for instr in &code_to_inline {
+                self.add_instr(*instr);
+            }
+
+            return Some(xt);
+        }
+
+        return None;
+    }
+
     pub fn add_instr(&mut self, code: Instr) -> XT {
         let ind = self.code.len();
 
@@ -2128,6 +2212,11 @@ impl<'tf> ToyForth<'tf> {
             panic!("cell at maximum dictionary size");
         }
 
+        if let Some(xt) = self.add_instr_optimize(code) {
+            return xt;
+        }
+
+        // fallback to a straightforward approach
         self.code.push(code);
 
         return XT(ind as u32);
