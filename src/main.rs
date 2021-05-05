@@ -492,6 +492,7 @@ struct ToyForth<'tf> {
     rstack: Vec<Word>,
     cstack: Vec<ControlEntry>,
     ufuncs: Vec<ForthFunc<'tf>>,
+    funcnames: Vec<String>,
 
     dict: Vec<DictEntry>,
     vars: Vec<Word>,
@@ -861,6 +862,7 @@ impl<'tf> ToyForth<'tf> {
             rstack:  std::vec::Vec::new(),
             cstack:  std::vec::Vec::new(),
             ufuncs:  std::vec::Vec::new(),
+            funcnames: std::vec::Vec::new(),
 
             dict:    std::vec::Vec::new(),
             vars:    std::vec::Vec::new(),
@@ -1461,21 +1463,32 @@ impl<'tf> ToyForth<'tf> {
             match instr {
                 Instr::Push(w) => {
                     if let WordKind::Int(n) = w.kind() {
-                        eprintln!("{}[{:5}{}] {:40} {:6} | Push([int] {})",
+                        eprintln!("{}[{:5}{}] {:30} {:6} |    Push([int] {})",
                             &indent_str, ind, highlight_char, istr, highlight_str, n);
                     } else {
-                        eprintln!("{}[{:5}{}] {:40} {:6} | Push({})",
+                        eprintln!("{}[{:5}{}] {:30} {:6} |    Push({})",
                             &indent_str, ind, highlight_char, istr, highlight_str, w);
                     }
                 }
                 Instr::DoCol(xt) => {
                     let name = xt_map[&xt.0];
-                    eprintln!("{}[{:5}{}] {:40} {:6} | {}",
+                    eprintln!("{}[{:5}{}] {:30} {:6} | C: {}",
+                        &indent_str, ind, highlight_char, istr, highlight_str, name);
+                },
+                Instr::Func(func_ind) => {
+                    let func_ind = *func_ind as usize;
+                    let name = if func_ind < self.ufuncs.len() && func_ind < self.funcnames.len() {
+                        &self.funcnames[func_ind]
+                    } else {
+                        "<unknown>"
+                    };
+
+                    eprintln!("{}[{:5}{}] {:30} {:6} | F: {}",
                         &indent_str, ind, highlight_char, istr, highlight_str, name);
                 },
                 _ => {
-                    eprintln!("{}[{:5}{}] {:40} {:6}",
-                        &indent_str, ind, highlight_char, istr, highlight_str);
+                    eprintln!("{}[{:5}{}] {:30} {:6} |    {}",
+                        &indent_str, ind, highlight_char, istr, highlight_str, istr);
                 }
             };
             if highlight && i == highlight_i {
@@ -2010,7 +2023,7 @@ impl<'tf> ToyForth<'tf> {
         return (ind,xt);
     }
 
-    pub fn add_anon_func(&mut self, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<usize,ForthError> {
+    fn add_named_func(&mut self, name: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<usize,ForthError> {
         let func_ind = self.ufuncs.len();
 
         if func_ind > 0xffff_ffff {
@@ -2018,13 +2031,19 @@ impl<'tf> ToyForth<'tf> {
         }
 
         self.ufuncs.push(ForthFunc(func));
+        self.funcnames.push(name.to_string());
         Ok(func_ind)
+    }
+
+
+    pub fn add_anon_func(&mut self, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<usize,ForthError> {
+        self.add_named_func("<anonymous>", func)
     }
 
     pub fn add_function(&mut self, word: &str, func: fn (&mut ToyForth<'tf>) -> Result<(),ForthError>) -> Result<(usize,XT),ForthError> {
         self.add_string(word)?;
 
-        let func_ind = self.add_anon_func(func)?;
+        let func_ind = self.add_named_func(word, func)?;
         let xt = self.add_primitive(word, Instr::Func(func_ind as u32))?;
 
         Ok((func_ind,xt))
