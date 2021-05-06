@@ -137,6 +137,31 @@ impl ST {
         }
     }
 
+    fn substr(self, off: u8, len: u8) -> ST {
+        let st = self.offset(off);
+
+        let addr = st.addr();
+        let new_len  = std::cmp::min(st.len(), len as u32) as u8;
+
+        match self {
+            ST::Allocated(_) => {
+                ST::allocated_space(addr, new_len)
+            },
+            ST::PadSpace(_) => {
+                ST::pad_space(addr as u8, new_len)
+            },
+            ST::WordSpace(_) => {
+                ST::word_space(addr as u8, new_len)
+            },
+            ST::InputSpace(_) => {
+                ST::input_space(addr as u8, new_len)
+            },
+            ST::PicSpace(_) => {
+                ST::pic_space(addr as u8, new_len)
+            },
+        }
+    }
+
     fn null() -> ST {
         // offset == 0, length == 0
         ST::Allocated(0)
@@ -516,6 +541,9 @@ struct ToyForth<'tf> {
     last_input_off: usize,
     last_word: ST,
 
+    source: ST,
+    source_id: i32,
+
     optimize: i32,
 
     // in_stream: Option<Rc<RefCell<(dyn std::io::BufRead)>>>,
@@ -858,6 +886,9 @@ impl<'tf> ToyForth<'tf> {
     const ADDR_IN     : VarAddr = VarAddr(VarAddr::BUILTIN | 0);
     const ADDR_OPTIMIZE:    VarAddr = VarAddr(VarAddr::BUILTIN | 1);
 
+    const SOURCE_STRING : i32 = -1;
+    const SOURCE_INPUT  : i32 =  0;
+
     pub fn new() -> ToyForth<'tf> {
         let mut tf = ToyForth{
             dstack:  std::vec::Vec::new(),
@@ -885,6 +916,9 @@ impl<'tf> ToyForth<'tf> {
             input_off: 0,
             last_input_off: 0,
             last_word: ST::null(),
+
+            source: ST::null(),
+            source_id: 0,
 
             optimize: 1,
 
@@ -1071,6 +1105,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("CREATE", ToyForth::builtin_create);
         tf.add_immed("DOES>", ToyForth::builtin_does);
         tf.add_func(">BODY", ToyForth::builtin_body);
+
+        tf.add_func("EVALUATE", ToyForth::builtin_evaluate);
 
         // debugging
         tf.add_func(".S", ToyForth::builtin_dot_s);
@@ -3631,6 +3667,31 @@ impl<'tf> ToyForth<'tf> {
         }
     }
 
+    fn builtin_evaluate(&mut self) -> Result<(), ForthError> {
+        /*
+        let len   = self.pop_uint()?;
+        let caddr0 = self.pop_str()?;
+
+        if len > u8::MAX as u32 {
+        }
+
+        let caddr = if caddr0.len() <= len {
+            caddr0
+        } else {
+            if len > (u8::MAX as u32) {
+                return Err(ForthError::StringTooLong);
+            }
+            caddr.substr(0, len as u8)
+        };
+
+        self.source = caddr;
+        self.
+
+        Ok(())
+        */
+        Err(ForthError::NotImplemented)
+    }
+
     fn builtin_constant(&mut self) -> Result<(), ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
@@ -4114,7 +4175,7 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    fn next_word(&mut self, delim: u8, max_len: usize) -> Result<ST, ForthError> {
+    fn next_input_word(&mut self, delim: u8, max_len: usize) -> Result<ST, ForthError> {
         let off0 = self.input_off;
         let bytes = self.input.as_bytes();
         let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], delim);
@@ -4135,6 +4196,33 @@ impl<'tf> ToyForth<'tf> {
         }
 
         Ok(ST::input_space(word_off as u8,len as u8))
+    }
+
+    fn next_word(&mut self, delim: u8, max_len: usize) -> Result<ST, ForthError> {
+        if self.source_id == ToyForth::SOURCE_INPUT {
+            return self.next_input_word(delim,max_len);
+        }
+
+        let off0 = self.input_off;
+        let bytes = self.bytes_at(self.source)?;
+        let (w0,w1,w2) = ToyForth::scan_word(&bytes[off0..], delim);
+
+        let word_off = off0 + w0;
+        let word_end = off0 + w1;
+        self.last_input_off = self.input_off;
+        self.input_off = off0 + w2;
+
+        let len = word_end - word_off;
+        if len >= max_len || len > (u8::MAX as usize) {
+            return Err(ForthError::StringTooLong);
+        }
+
+        // TODO: Handle large offset by copying to word space?
+        if word_off > self.word.len() || word_off > (u8::MAX as usize) || word_off + len > self.word.len() {
+            return Err(ForthError::StringOffsetTooLarge);
+        }
+
+        Ok(self.source.substr(word_off as u8, len as u8))
     }
 
     // [CHAR]
