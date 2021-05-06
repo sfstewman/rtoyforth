@@ -395,6 +395,12 @@ impl<'tf> PartialEq for ForthFunc<'tf> {
 impl<'tf> Eq for ForthFunc<'tf> { }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
+enum ForthResult {
+    Bye,
+    Refill,
+}
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum Instr {
     Empty,
     Bye,
@@ -423,6 +429,7 @@ enum Instr {
     Execute,
     Func(u32),
     DoCol(XT),
+    Refill,
     Exit,               // redundant with Unnest... but Unnest currently marks the end of a function
     Unnest,
 }
@@ -1088,6 +1095,7 @@ impl<'tf> ToyForth<'tf> {
 
         tf.add_func("/ETYPE", ToyForth::builtin_err_type);
         tf.add_immed("E\"", ToyForth::builtin_err_quote);
+        tf.add_func(".E", ToyForth::builtin_dot_e);
 
         tf.add_immed("[", ToyForth::builtin_obracket);
         tf.add_immed("]", ToyForth::builtin_cbracket);
@@ -1106,11 +1114,18 @@ impl<'tf> ToyForth<'tf> {
         tf.add_immed("DOES>", ToyForth::builtin_does);
         tf.add_func(">BODY", ToyForth::builtin_body);
 
+        tf.add_func("/EMPTY-RETURN", ToyForth::builtin_empty_return);
+        tf.add_func("/CLEAR-COMPILE-STATE", ToyForth::builtin_clear_compile_state);
+
         tf.add_func("EVALUATE", ToyForth::builtin_evaluate);
+
+        tf.add_prim("/REFILL", Instr::Refill);
+        tf.add_func("/INPUT-LENGTH", ToyForth::builtin_input_len);
 
         // debugging
         tf.add_func(".S", ToyForth::builtin_dot_s);
         tf.add_func("SEE", ToyForth::builtin_see);
+        // tf.add_func("DUMP", ToyForth::builtin_dump);
 
         // define state variables
         //
@@ -1144,7 +1159,7 @@ impl<'tf> ToyForth<'tf> {
             Instr::Unnest,
         ], 0).unwrap();
 
-        tf.interpret("\
+        tf.bootstrap_interpret("\
 : . .. BL EMIT ;
 
 : 0<  0 < ;
@@ -1296,20 +1311,20 @@ impl<'tf> ToyForth<'tf> {
     THEN
 ; IMMEDIATE
 
+VARIABLE >PIC-IN
+VARIABLE >PIC-STR
+: <# 
+    0   >PIC-IN !
+    PIC >PIC-STR !
+;
+
 \\ Double cell stuff
 : S>D DUP 0< IF -1 ELSE 0 THEN ;
 : */ */MOD SWAP DROP ;
 
-\\ : QUIT 
-\\     /EMPTY-RETURN
-\\     /CLEAR-COMPILE-STATE
-\\     BEGIN
-\\         REFILL WHILE 
-\\         /INTERPRET
-\\         ( handle INTERPRET )
-\\     REPEAT
-\\     BYE
-\\ ;
+: REFILL 
+    /REFILL /INPUT-LENGTH 0<>
+;
 
 VARIABLE LAST-WORD
 
@@ -1368,6 +1383,18 @@ VARIABLE LAST-WORD
 
     REPEAT
     DROP                    ( caddr -- )
+;
+
+: QUIT 
+    /EMPTY-RETURN
+    /CLEAR-COMPILE-STATE
+    BEGIN
+        .\" ok\" CR
+        REFILL IF
+            /INTERPRET
+            ( handle INTERPRET )
+        THEN
+    AGAIN
 ;
 
 ").unwrap();
@@ -1713,9 +1740,20 @@ VARIABLE LAST-WORD
     pub fn interpret(&mut self, s: &str) -> Result<(), ForthError> {
         // initial interpret is dumb...
 
+        let quit_xt = self.lookup_word("QUIT")?;
+        self.pc = quit_xt.0;
+        if let ForthResult::Bye = self.exec()? {
+            return Ok(());
+        }
+
         for l in s.lines() {
+            // eprintln!("l: {}", l);
             self.set_input(l);
-            self.builtin_interpret()?;
+
+            let ret = self.exec()?;
+            if let ForthResult::Bye = ret {
+                return Ok(());
+            }
         }
 
         Ok(())
@@ -1786,117 +1824,135 @@ VARIABLE LAST-WORD
         Err(ForthError::Abort)
     }
 
+    pub fn bootstrap_interpret(&mut self, s: &str) -> Result<(), ForthError> {
+        // initial interpret is dumb...
+
+        for l in s.lines() {
+            self.set_input(l);
+            self.builtin_interpret()?;
+        }
+
+        Ok(())
+    }
+
+    pub fn handle_error(&mut self, err: &ForthError) {
+        eprint!("E{}: ", err.code());
+        match err {
+            ForthError::Abort => {},
+
+            ForthError::WordNotFound(st) => {
+                if let Ok(s) = self.maybe_string_at(*st) {
+                    eprintln!("Word not found: {}", s);
+                } else {
+                    let b = self.bytes_at(*st);
+                    eprintln!("Word not found (bytes): {:?}", b);
+                }
+            },
+            ForthError::InvalidArgument(w) => {
+                eprintln!("Invalid argument: {}", w);
+            },
+            ForthError::ExpectedXT(w) => {
+                eprintln!("Expected XT but found: {}", w);
+            },
+            ForthError::ExpectedString(w) => {
+                eprintln!("Expected string but found: {}", w);
+            },
+            ForthError::ExpectedInteger(w) => {
+                eprintln!("Expected integer but found: {}", w);
+            },
+            ForthError::ExpectedVarAddr(w) => {
+                eprintln!("Expected var address but found: {}", w);
+            },
+            ForthError::ExpectedAddr(w) => {
+                eprintln!("Expected address (var or char) but found: {}", w);
+            },
+            ForthError::InvalidCell(xt) => {
+                eprintln!("Invalid cell at xt = {}", xt.0);
+            },
+            ForthError::InvalidControlEntry(ctl) => {
+                // TODO: print control stack
+                eprintln!("Invalid control entry: {:?}", ctl);
+            },
+            ForthError::InvalidIndex(w) => {
+                eprintln!("Invalid index: {:?}", w);
+            },
+            ForthError::InvalidControlInstruction(xt) => {
+                // TODO: print instructions around this one
+                eprintln!("Invalid control instruction xt={:?}", xt.0);
+            },
+            ForthError::InvalidExecutionToken(w) => {
+                eprintln!("Invalid execution token (expected XT): {:?}", w);
+            },
+            ForthError::InvalidString(st) => {
+                let b = self.bytes_at(*st);
+                eprintln!("Invalid string (not utf8): st={:?} bytes={:?}", st, b);
+            },
+            ForthError::InvalidChar(value) => {
+                eprintln!("Invalid char (not in range): {}", value);
+            },
+            ForthError::InvalidAddress(addr) => {
+                eprintln!("Invalid address (out of range or not a valid builtin): {:?}", addr);
+            },
+            ForthError::InvalidCountedString(st) => {
+                let b = self.bytes_at(*st);
+                eprintln!("Invalid counted string (len != count): st={:?}, bytes={:?}", st,b);
+            },
+            ForthError::InvalidStringValue(val) => {
+                eprintln!("Invalid string value: u32 {:x} is not a valid string", val);
+            },
+            ForthError::InvalidFunction(ind) => {
+                eprintln!("Invalid function index {}", ind);
+            },
+
+            ForthError::IOError(err) => {
+                eprintln!("IO Error: {}", err);
+            },
+
+            _ => {
+                eprintln!("Error: {:?}", err);
+            }
+        }
+
+        if let ForthError::Abort = err {
+        } else {
+            eprintln!("Input: {}", self.input);
+
+            if let ST::InputSpace(ScratchLoc{len,off}) = self.last_word {
+                let pfx = format!("{:>width$}", "^", width=(off as usize)+1);
+                let sfx = if len > 0 {
+                    format!("{:->width$}", "^", width=(len as usize))
+                } else {
+                    "".to_string()
+                };
+                eprintln!("Word:  {}{}", pfx,sfx);
+            }
+
+            // FIXME: correctly handle utf-8 input...
+            let pfx = format!("{:>width$}", "^", width=self.last_input_off+1);
+            let sfx = if self.input_off > self.last_input_off {
+                format!("{:->width$}", "^", width=self.input_off-self.last_input_off)
+            } else {
+                "".to_string()
+            };
+            eprintln!("Parsed:{}{}", pfx,sfx);
+
+            self.print_backtrace();
+
+            self.print_stacks("--[ STACKS ]--");
+            // TODO: backtrace the stacks
+        }
+
+        self.clear_stacks();
+        self.input.clear();
+        self.input_off = 0;
+        self.last_input_off = 0;
+    }
+
     pub fn builtin_interpret(&mut self) -> Result<(), ForthError> {
         let ret = self.inner_interpret();
 
         if let Err(err) = &ret {
-            eprint!("E{}: ", err.code());
-            match err {
-                ForthError::Abort => {},
-
-                ForthError::WordNotFound(st) => {
-                    if let Ok(s) = self.maybe_string_at(*st) {
-                        eprintln!("Word not found: {}", s);
-                    } else {
-                        let b = self.bytes_at(*st);
-                        eprintln!("Word not found (bytes): {:?}", b);
-                    }
-                },
-                ForthError::InvalidArgument(w) => {
-                    eprintln!("Invalid argument: {}", w);
-                },
-                ForthError::ExpectedXT(w) => {
-                    eprintln!("Expected XT but found: {}", w);
-                },
-                ForthError::ExpectedString(w) => {
-                    eprintln!("Expected string but found: {}", w);
-                },
-                ForthError::ExpectedInteger(w) => {
-                    eprintln!("Expected integer but found: {}", w);
-                },
-                ForthError::ExpectedVarAddr(w) => {
-                    eprintln!("Expected var address but found: {}", w);
-                },
-                ForthError::ExpectedAddr(w) => {
-                    eprintln!("Expected address (var or char) but found: {}", w);
-                },
-                ForthError::InvalidCell(xt) => {
-                    eprintln!("Invalid cell at xt = {}", xt.0);
-                },
-                ForthError::InvalidControlEntry(ctl) => {
-                    // TODO: print control stack
-                    eprintln!("Invalid control entry: {:?}", ctl);
-                },
-                ForthError::InvalidIndex(w) => {
-                    eprintln!("Invalid index: {:?}", w);
-                },
-                ForthError::InvalidControlInstruction(xt) => {
-                    // TODO: print instructions around this one
-                    eprintln!("Invalid control instruction xt={:?}", xt.0);
-                },
-                ForthError::InvalidExecutionToken(w) => {
-                    eprintln!("Invalid execution token (expected XT): {:?}", w);
-                },
-                ForthError::InvalidString(st) => {
-                    let b = self.bytes_at(*st);
-                    eprintln!("Invalid string (not utf8): st={:?} bytes={:?}", st, b);
-                },
-                ForthError::InvalidChar(value) => {
-                    eprintln!("Invalid char (not in range): {}", value);
-                },
-                ForthError::InvalidAddress(addr) => {
-                    eprintln!("Invalid address (out of range or not a valid builtin): {:?}", addr);
-                },
-                ForthError::InvalidCountedString(st) => {
-                    let b = self.bytes_at(*st);
-                    eprintln!("Invalid counted string (len != count): st={:?}, bytes={:?}", st,b);
-                },
-                ForthError::InvalidStringValue(val) => {
-                    eprintln!("Invalid string value: u32 {:x} is not a valid string", val);
-                },
-                ForthError::InvalidFunction(ind) => {
-                    eprintln!("Invalid function index {}", ind);
-                },
-
-                ForthError::IOError(err) => {
-                    eprintln!("IO Error: {}", err);
-                },
-
-                _ => {
-                    eprintln!("Error: {:?}", err);
-                }
-            }
-
-            if let ForthError::Abort = err {
-            } else {
-                eprintln!("Input: {}", self.input);
-
-                if let ST::InputSpace(ScratchLoc{len,off}) = self.last_word {
-                    let pfx = format!("{:>width$}", "^", width=(off as usize)+1);
-                    let sfx = if len > 0 {
-                        format!("{:->width$}", "^", width=(len as usize))
-                    } else {
-                        "".to_string()
-                    };
-                    eprintln!("Word:  {}{}", pfx,sfx);
-                }
-
-                // FIXME: correctly handle utf-8 input...
-                let pfx = format!("{:>width$}", "^", width=self.last_input_off+1);
-                let sfx = if self.input_off > self.last_input_off {
-                    format!("{:->width$}", "^", width=self.input_off-self.last_input_off)
-                } else {
-                    "".to_string()
-                };
-                eprintln!("Parsed:{}{}", pfx,sfx);
-
-                self.print_backtrace();
-
-                self.print_stacks("--[ STACKS ]--");
-                // TODO: backtrace the stacks
-            }
-
-            self.clear_stacks();
+            self.handle_error(err);
         }
 
         ret
@@ -1985,7 +2041,7 @@ VARIABLE LAST-WORD
         Ok(())
     }
 
-    pub fn builtin_refill(&mut self) -> Result<(), ForthError> {
+    pub fn refill_from_in_stream(&mut self) -> Result<bool, ForthError> {
         self.last_input_off = 0;
         self.input_off = 0;
         self.input.clear();
@@ -1994,14 +2050,26 @@ VARIABLE LAST-WORD
             let r = inp.borrow();
             let s = &mut self.input;
             r.read_line(s)?;
-            if let Some(ch) = s.pop() {
-                if ch != '\n' {
-                    s.push(ch);
+            match s.pop() {
+                Some(ch) => {
+                    if ch != '\n' {
+                        s.push(ch);
+                    }
+
+                    return Ok(true);
+                },
+
+                None => {
+                    return Ok(false);
                 }
             }
-
         }
 
+        Ok(false)
+    }
+
+    pub fn builtin_refill(&mut self) -> Result<(), ForthError> {
+        self.refill_from_in_stream()?;
         Ok(())
     }
 
@@ -2051,6 +2119,30 @@ VARIABLE LAST-WORD
         let old_in  = std::mem::replace(&mut self.in_stream, Some(r));
         let old_out = std::mem::replace(&mut self.out_stream, Some(w));
 
+        let quit_xt = self.lookup_word("QUIT")?;
+        self.pc = quit_xt.0;
+
+        loop {
+            match self.exec() {
+                Ok(ForthResult::Bye) => {
+                    break;
+                },
+
+                Ok(ForthResult::Refill) => {
+                    let succ = self.refill_from_in_stream()?;
+                    if !succ {
+                        break;
+                    }
+                },
+
+                Err(err) => {
+                    self.handle_error(&err);
+                    self.pc = quit_xt.0;
+                },
+            }
+        }
+
+        /*
         // TODO:
         //   1) Replace REPL loop with Forth code.  This should bootstrap the interpreter
         //      and call QUIT.
@@ -2075,6 +2167,7 @@ VARIABLE LAST-WORD
                 println!("error: {:?}", err);
             }
         }
+        */
 
         self.in_stream  = old_in;
         self.out_stream = old_out;
@@ -2278,21 +2371,22 @@ VARIABLE LAST-WORD
                     },
 
                     // Instructions that we can 
-                    Instr::Bye |
-                        Instr::Push(_) |
-                        Instr::Drop |
-                        Instr::Pick |
-                        Instr::Roll |
-                        Instr::Rot |
-                        Instr::Dup |
-                        Instr::Swap |
-                        Instr::Over |
-                        Instr::BinaryOp(_) |
-                        Instr::UnaryOp(_) |
-                        Instr::Error(_) |
-                        Instr::Execute |
-                        Instr::Func(_) |
-                        Instr::DoCol(_) => {
+                    Instr::Bye
+                       | Instr::Push(_)
+                       | Instr::Drop
+                       | Instr::Pick
+                       | Instr::Roll
+                       | Instr::Rot
+                       | Instr::Dup
+                       | Instr::Swap 
+                       | Instr::Over 
+                       | Instr::BinaryOp(_)
+                       | Instr::UnaryOp(_)
+                       | Instr::Error(_)
+                       | Instr::Execute
+                       | Instr::Func(_)
+                       | Instr::DoCol(_)
+                       | Instr::Refill => {
                             code_to_inline.push(*instr);
                     },
 
@@ -3329,6 +3423,11 @@ VARIABLE LAST-WORD
         Ok(XT(0))
     }
 
+    fn ret_push(&mut self, xt: XT) -> Result<(),ForthError> {
+        self.rstack.push(xt.to_word());
+        Ok(())
+    }
+
     fn ret_push_bye(&mut self) -> Result<(),ForthError> {
         let bye_xt = self.lookup_bye()?;
         self.rstack.push(bye_xt.to_word());
@@ -3404,8 +3503,13 @@ VARIABLE LAST-WORD
             self.add_instr(Instr::Execute);
         } else {
             let xt = self.pop_xt()?;
+            /*
             self.ret_push_bye()?;
             self.exec_at(xt)?;
+            */
+
+            self.ret_push(XT(self.pc+1))?;
+            self.pc = xt.0;
         }
 
         Ok(())
@@ -3620,6 +3724,12 @@ VARIABLE LAST-WORD
         Ok(())
     }
 
+    fn builtin_input_len(&mut self) -> Result<(), ForthError> {
+        // TODO: check for overflow!
+        self.push_int(self.input.len() as i32)?;
+        Ok(())
+    }
+
     fn builtin_pad(&mut self) -> Result<(), ForthError> {
         self.push_str(ST::pad_space(0,std::cmp::min(u8::MAX as usize, self.pad.len()) as u8))?;
         Ok(())
@@ -3738,6 +3848,18 @@ VARIABLE LAST-WORD
         } else {
             return Err(ForthError::InvalidCell(xt));
         }
+    }
+
+    fn builtin_empty_return(&mut self) -> Result<(), ForthError> {
+        self.rstack.clear();
+        Ok(())
+    }
+
+    fn builtin_clear_compile_state(&mut self) -> Result<(), ForthError> {
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT, Word(0))?;
+        self.set_var_at(ToyForth::ADDR_STATE, Word::int(0))?;
+        Ok(())
     }
 
     fn builtin_evaluate(&mut self) -> Result<(), ForthError> {
@@ -4637,6 +4759,12 @@ VARIABLE LAST-WORD
         Ok(())
     }
 
+    pub fn builtin_dot_e(&mut self) -> Result<(),ForthError> {
+        let w = self.pop().ok_or(ForthError::StackUnderflow)?;
+        eprintln!("{} ", w);
+        Ok(())
+    }
+
     pub fn builtin_depth(&mut self) -> Result<(),ForthError> {
         let depth = self.stack_depth();
         // TODO: check for overflow!
@@ -4770,7 +4898,7 @@ VARIABLE LAST-WORD
         self.dstack.pop().map(Word::kind)
     }
 
-    pub fn exec_at(&mut self, xt: XT) -> Result<(), ForthError> {
+    pub fn exec_at(&mut self, xt: XT) -> Result<ForthResult, ForthError> {
         let prev_pc = self.pc;
         self.pc = xt.0;
         let ret = self.exec();
@@ -4780,7 +4908,7 @@ VARIABLE LAST-WORD
         return ret;
     }
 
-    pub fn exec(&mut self) -> Result<(), ForthError> {
+    pub fn exec(&mut self) -> Result<ForthResult, ForthError> {
         loop {
             if self.pc as usize >= self.code.len() {
                 return Err(ForthError::InvalidPC(self.pc));
@@ -4793,7 +4921,7 @@ VARIABLE LAST-WORD
                     return Err(ForthError::InvalidCell(XT(self.pc)));
                 },
                 Instr::Bye => {
-                    return Ok(());
+                    return Ok(ForthResult::Bye);
                 },
                 Instr::Push(w) => {
                     self.push(w)?;
@@ -4975,6 +5103,17 @@ VARIABLE LAST-WORD
                     self.rstack.push(Word::xt(self.pc+1));
                     self.pc = new_pc.0;
                 },
+                Instr::Refill => {
+                    // clear input state
+                    self.input.clear();
+                    self.input_off = 0;
+                    self.last_input_off = 0;
+
+                    // set up for next instruction
+                    self.pc += 1;
+
+                    return Ok(ForthResult::Refill);
+                },
                 Instr::Exit|Instr::Unnest => {
                     let val = self.rstack.pop().ok_or(ForthError::ReturnStackUnderflow)?;
                     let ret = val.to_xt().ok_or_else(|| ForthError::InvalidExecutionToken(val))?;
@@ -5146,7 +5285,7 @@ mod tests {
         ];
 
         let xt = forth.add_code(&code);
-        forth.exec_at(xt).unwrap();
+        assert_eq!(forth.exec_at(xt).unwrap(), ForthResult::Bye);
 
         assert_eq!(forth.pop().unwrap(), Word::int(-41820));
         assert_eq!(forth.pop(), None);
@@ -5468,7 +5607,7 @@ mod tests {
         forth.builtin_find().unwrap();
 
         assert_eq!(forth.pop_int().unwrap(), -1);
-        forth.builtin_execute().unwrap();
+        forth.interpret("EXECUTE").unwrap();
         assert_eq!(forth.pop_int().unwrap(), 2469);
     }
 
@@ -6289,17 +6428,27 @@ FOO @
 
         forth.interpret("\
 : FACTORIAL 
-    DUP 1 > IF
+    E\" DEFINING FACTORIAL\"
+    DUP 1 .S > IF
         DUP 1- RECURSE *
+        .S
     THEN
 ;
 ").unwrap();
 
+        forth.interpret("5 DROP").unwrap();
+        forth.print_stacks("--1--");
+        forth.print_word_code("FACTORIAL");
+
+        let normal_depth = forth.rstack_depth();
+        eprintln!("normal depth = {}", normal_depth);
+
         forth.interpret("5 FACTORIAL").unwrap();
+        forth.print_stacks("factorial");
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), normal_depth);
 
         assert_eq!(forth.pop_int().unwrap(), 120);
     }
@@ -7009,7 +7158,7 @@ vd1").unwrap();
     fn two_word_stack_functions() {
         let mut forth = ToyForth::new();
 
-        forth.interpret("1 2 3 2DROP").unwrap();
+        forth.interpret("1 2 3 2DROP .S").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 1);
 
