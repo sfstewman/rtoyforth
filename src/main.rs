@@ -245,6 +245,8 @@ impl Word {
     const INT_MIN  : i32 = -1073741824;
     const INT_MAX  : i32 =  1073741823;
 
+    const UINT_MAX : u32 =  Word::INT_MASK;
+
     const XT_MASK  : u32 = 0x1fff_ffff;
     const STR_MASK : u32 = 0x3fff_ffff;
     const XT_BITS  : u32 = Word::HIGH_BIT | Word::SIGN_BIT;
@@ -2452,6 +2454,15 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    pub fn push_uint(&mut self, v: u32) -> Result<(), ForthError> {
+        if v > Word::UINT_MAX {
+            return Err(ForthError::NumberOutOfRange);
+        }
+
+        self.push(Word(v))?;
+        Ok(())
+    }
+
     pub fn push_int(&mut self, v: i32) -> Result<(), ForthError> {
         self.push(Word::int(v))
     }
@@ -2642,14 +2653,14 @@ impl<'tf> ToyForth<'tf> {
         let dividend = self.pop_dbl_uint()?;
 
         let quot : u64 = dividend / (divisor as u64);
-        if quot > (Word::INT_MASK as u64) {
+        if quot > (Word::UINT_MAX as u64) {
             return Err(ForthError::NumberOutOfRange);
         }
 
         let rem : u64 = dividend - (divisor as u64)*quot;
 
-        self.push_int(rem as i32)?;
-        self.push_int(quot as i32)?;
+        self.push_uint(rem as u32)?;
+        self.push_uint(quot as u32)?;
         Ok(())
     }
 
@@ -3284,23 +3295,6 @@ impl<'tf> ToyForth<'tf> {
         }
 
         Ok(())
-    }
-
-    fn input_lookup(&mut self) -> Result<(), ForthError> {
-        let i1 = self.pop_int()?;
-        let i0 = self.pop_int()?;
-
-        // TODO: bounds checks?
-        let s = &self.input[i0 as usize..i1 as usize];
-        match self.lookup_word(s) {
-            Ok(xt) => {
-                self.push(Word::from_xt(xt))?;
-                Ok(())
-            },
-            Err(err) => {
-                Err(err)
-            }
-        }
     }
 
     fn pop_char(&mut self) -> Result<u8, ForthError> {
@@ -4478,7 +4472,7 @@ impl<'tf> ToyForth<'tf> {
     }
 
     pub fn builtin_depth(&mut self) -> Result<(),ForthError> {
-        let depth = self.dstack.len();
+        let depth = self.stack_depth();
         // TODO: check for overflow!
         self.push_int(depth as i32)?;
         Ok(())
@@ -4513,10 +4507,6 @@ impl<'tf> ToyForth<'tf> {
     // nb: pop is only called from rust, so it's not a forth primitive
     pub fn peek(&self) -> Option<Word> {
         self.dstack.last().map(|x| *x)
-    }
-
-    pub fn peek_kind(&self) -> Option<WordKind> {
-        self.peek().map(Word::kind)
     }
 
     // nb: pop is only called from rust, so it's not a forth primitive
