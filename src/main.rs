@@ -1162,6 +1162,8 @@ impl<'tf> ToyForth<'tf> {
 
 : ABORT\" POSTPONE S\" POSTPONE MAYBE-DISPLAY-ABORT ; IMMEDIATE
 
+130 CONSTANT ERR:WORD-NOT-FOUND
+
 0    CONSTANT FALSE
 0 0= CONSTANT TRUE
 
@@ -1297,6 +1299,77 @@ impl<'tf> ToyForth<'tf> {
 \\ Double cell stuff
 : S>D DUP 0< IF -1 ELSE 0 THEN ;
 : */ */MOD SWAP DROP ;
+
+\\ : QUIT 
+\\     /EMPTY-RETURN
+\\     /CLEAR-COMPILE-STATE
+\\     BEGIN
+\\         REFILL WHILE 
+\\         /INTERPRET
+\\         ( handle INTERPRET )
+\\     REPEAT
+\\     BYE
+\\ ;
+
+VARIABLE LAST-WORD
+
+: PARSE-NUMBER  ( caddr u -- n 1 | caddr u 0 )
+    OVER >R             ( caddr u -- caddr u )      ( R: -- caddr )
+    >R                  ( caddr u -- caddr )        ( R: caddr -- caddr u )
+    DUP C@              ( caddr -- caddr ch )       ( R: caddr u -- caddr u )
+    [CHAR] - =          ( caddr ch -- caddr -? )    ( R: caddr u -- caddr u )
+    SWAP OVER           ( caddr -? -- -? caddr -? ) ( R: caddr u -- caddr u )
+    0<> IF              ( -? caddr -? -- -? caddr ) ( R: caddr u -- caddr u )
+        \\ remove leading minus, update length
+        CHAR+           ( -? caddr -- -? caddr1 )   ( R: caddr u -- caddr u )
+        R> 1 - >R       ( -? caddr -- -? caddr1 )   ( R: caddr u -- caddr u1 )
+    THEN
+
+    0 SWAP R> DUP >R    ( -? caddr -- -? 0 caddr u ) ( R: caddr u -- caddr u )
+    >NUMBER             ( -? 0 caddr u -- -? ud caddr2 u2 ) ( R: caddr u -- caddr u )
+    R> <>               ( -? ud caddr2 u2 -- -? ud caddr2 neq? ) ( R: caddr u -- caddr )
+    IF                  ( -? ud caddr2 neq? -- -? ud caddr2 ) ( R: caddr -- caddr )
+        R> [ ERR:WORD-NOT-FOUND ] RAISE-ERROR
+    THEN
+
+    DROP SWAP           ( -? ud caddr2 -- ud -? )   ( R: caddr -- caddr )
+    R> DROP             ( ud -? -- ud -? )          ( R: caddr -- )
+    IF NEGATE THEN      ( ud -? -- ud )
+;
+
+: /INTERPRET
+    BEGIN
+        \\ parse next word
+        BL PARSE            ( -- caddr u )
+
+    ?DUP WHILE              \\ exit if there is no word
+
+        OVER LAST-WORD !    ( caddr u -- caddr u )
+        FIND-NAME           ( caddr u -- caddr u 0 | xt 1 | xt -1 )
+
+        CASE
+        0 OF                ( caddr u 0 -- caddr u ) \\ 0: not found, try parse as number
+            PARSE-NUMBER
+        ENDOF
+
+        1 OF                ( xt 1 -- xt ) \\ 1: immediate word, always execute
+            EXECUTE         ( xt -- )
+        ENDOF
+
+        -1 OF               \\ -1: non-immediate word, execute or compile
+            STATE @ IF
+                POSTPONE COMPILE,    ( xt -- ) \\ compiling
+            ELSE
+                EXECUTE     ( xt -- ) \\ not compiling
+            THEN
+        ENDOF
+
+        ENDCASE
+
+    REPEAT
+    DROP                    ( caddr -- )
+;
+
 ").unwrap();
 
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
