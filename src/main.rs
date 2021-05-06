@@ -1073,8 +1073,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func(">BODY", ToyForth::builtin_body);
 
         // debugging
-        tf.add_func("/STACKS", ToyForth::builtin_at_stacks);
-        tf.add_func("/CODE", ToyForth::builtin_at_code);
+        tf.add_func(".S", ToyForth::builtin_dot_s);
+        tf.add_func("SEE", ToyForth::builtin_see);
 
         // define state variables
         //
@@ -1094,7 +1094,11 @@ impl<'tf> ToyForth<'tf> {
         tf.add_prim("/OPTIMIZE", Instr::Push(ToyForth::ADDR_OPTIMIZE.to_word()));
 
         tf.add_func("DEPTH",  ToyForth::builtin_depth);
+        tf.add_func("CONTROL-DEPTH",  ToyForth::builtin_control_depth);
+        tf.add_func("RETURN-DEPTH",  ToyForth::builtin_return_depth);
         tf.add_func("HERE",   ToyForth::builtin_here);
+        tf.add_func("CHAR-HERE", ToyForth::builtin_char_here);
+        tf.add_func("CODE-HERE", ToyForth::builtin_code_here);
         tf.add_func("UNUSED", ToyForth::builtin_unused);
 
         // define standard words that are not primitives
@@ -1556,7 +1560,7 @@ impl<'tf> ToyForth<'tf> {
         eprintln!("done\n");
     }
 
-    pub fn builtin_at_code(&mut self) -> Result<(),ForthError> {
+    pub fn builtin_see(&mut self) -> Result<(),ForthError> {
         self.push_int(' ' as i32)?;
         self.builtin_parse()?;
 
@@ -1569,7 +1573,7 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
-    pub fn builtin_at_stacks(&mut self) -> Result<(),ForthError> {
+    pub fn builtin_dot_s(&mut self) -> Result<(),ForthError> {
         self.print_stacks("[ /STACKS ]");
         Ok(())
     }
@@ -1677,6 +1681,7 @@ impl<'tf> ToyForth<'tf> {
         let ret = self.inner_interpret();
 
         if let Err(err) = &ret {
+            eprint!("E{}: ", err.code());
             match err {
                 ForthError::Abort => {},
 
@@ -4478,6 +4483,20 @@ impl<'tf> ToyForth<'tf> {
         Ok(())
     }
 
+    pub fn builtin_control_depth(&mut self) -> Result<(),ForthError> {
+        let depth = self.cstack_depth();
+        // TODO: check for overflow!
+        self.push_int(depth as i32)?;
+        Ok(())
+    }
+
+    pub fn builtin_return_depth(&mut self) -> Result<(),ForthError> {
+        let depth = self.rstack_depth();
+        // TODO: check for overflow!
+        self.push_int(depth as i32)?;
+        Ok(())
+    }
+
     pub fn here(&self) -> VarAddr {
         let here = self.vars.len();
 
@@ -4487,6 +4506,18 @@ impl<'tf> ToyForth<'tf> {
 
     pub fn builtin_here(&mut self) -> Result<(),ForthError> {
         self.push(self.here().to_word())?;
+        Ok(())
+    }
+
+    pub fn builtin_code_here(&mut self) -> Result<(),ForthError> {
+        // check for overflow!
+        self.push_uint(self.code_size())?;
+        Ok(())
+    }
+
+    pub fn builtin_char_here(&mut self) -> Result<(),ForthError> {
+        // check for overflow!
+        self.push_uint(self.char_here())?;
         Ok(())
     }
 
@@ -5899,7 +5930,7 @@ test3 test4").unwrap();
     BEGIN
         5 +
         DUP . CR
-        DUP /STACKS 28 > IF /STACKS EXIT THEN 
+        DUP .S 28 > IF .S EXIT THEN 
     AGAIN
 ;
 
@@ -5978,10 +6009,10 @@ BAR
         OVER *
         DUP 100 > IF LEAVE THEN
         .\" Iteration \" I .  .\" Value \" DUP . CR
-        /STACKS
+        .S
     LOOP
     SWAP DROP
-    /STACKS
+    .S
     .\" Final: \" DUP . CR
 ;
 ").unwrap();
@@ -6041,23 +6072,23 @@ BAR
 VARIABLE iter
 : BAR
     .\" Starting iteration\" CR
-    /STACKS
+    .S
     -1 iter !
     5 SWAP 
     ?DO
         1+
         I iter !
         .\" Iteration\" I . .\" iter = \" iter @ . CR
-        /STACKS
+        .S
         \\ LEAVE
     LOOP
     .\" Done. iter = \" iter @ . CR
-    /STACKS
+    .S
 ;").unwrap();
 
         forth.print_word_code("BAR");
 
-        forth.interpret("0 5 BAR iter @ /STACKS").unwrap();
+        forth.interpret("0 5 BAR iter @ .S").unwrap();
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.pop_int().unwrap(), -1);
         assert_eq!(forth.pop_int().unwrap(),  0);
@@ -6789,7 +6820,7 @@ vd1").unwrap();
 
         forth.print_word_code("TO");
 
-        forth.interpret(": vd2 TO v2 ; /STACKS").unwrap();
+        forth.interpret(": vd2 TO v2 ; .S").unwrap();
         forth.print_word_code("vd2");
         assert_eq!(forth.stack_depth(), 0);
 
@@ -6979,7 +7010,7 @@ st1 @ @
             let mut outb = outv.borrow_mut();
             let s = std::str::from_utf8(&outb).unwrap();
             eprintln!("output is\n{}", s);
-            assert_eq!(s, format!("{} ", Word::INT_MASK-99));
+            assert_eq!(s, format!("{} ", Word::UINT_MAX-99));
             outb.clear();
         }
 
