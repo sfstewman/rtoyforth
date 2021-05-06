@@ -403,6 +403,7 @@ enum ForthResult {
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum Instr {
     Empty,
+    Nop,
     Bye,
     Push(Word),
     Drop,
@@ -946,6 +947,8 @@ impl<'tf> ToyForth<'tf> {
         tf.add_instr(Instr::Error(ForthError::DEFERRED_FUNCTION_NOT_SET));
         tf.add_instr(Instr::Unnest);
 
+        tf.add_prim("NOP", Instr::Nop);
+
         tf.add_prim("DUP", Instr::Dup);
         tf.add_prim("DROP", Instr::Drop);
         tf.add_prim("SWAP", Instr::Swap);
@@ -1327,6 +1330,8 @@ VARIABLE >PIC-STR
 ;
 
 VARIABLE LAST-WORD
+CREATE REPL-PROMPT 2 ALLOT
+: SET-DEFAULT-PROMPT S\" ok\" REPL-PROMPT 2! ;
 
 : PARSE-NUMBER  ( caddr u -- n 1 | caddr u 0 )
     OVER >R             ( caddr u -- caddr u )      ( R: -- caddr )
@@ -1352,6 +1357,15 @@ VARIABLE LAST-WORD
     IF NEGATE THEN      ( ud -? -- ud )
 ;
 
+: SHOW-PROMPT
+    REPL-PROMPT 2@
+    ?DUP IF
+        TYPE CR
+    ELSE
+        DROP
+    THEN
+;
+
 : /INTERPRET
     BEGIN
         \\ parse next word
@@ -1365,6 +1379,7 @@ VARIABLE LAST-WORD
         CASE
         0 OF                ( caddr u 0 -- caddr u ) \\ 0: not found, try parse as number
             PARSE-NUMBER
+            STATE @ IF POSTPONE LITERAL THEN
         ENDOF
 
         1 OF                ( xt 1 -- xt ) \\ 1: immediate word, always execute
@@ -1389,7 +1404,7 @@ VARIABLE LAST-WORD
     /EMPTY-RETURN
     /CLEAR-COMPILE-STATE
     BEGIN
-        .\" ok\" CR
+        SHOW-PROMPT
         REFILL IF
             /INTERPRET
             ( handle INTERPRET )
@@ -2368,6 +2383,11 @@ VARIABLE LAST-WORD
                 match instr {
                     Instr::Unnest => {
                         break
+                    },
+
+                    Instr::Nop => {
+                        /* we can omit this one */
+                        continue;
                     },
 
                     // Instructions that we can 
@@ -4920,6 +4940,9 @@ VARIABLE LAST-WORD
                 Instr::Empty => {
                     return Err(ForthError::InvalidCell(XT(self.pc)));
                 },
+                Instr::Nop => {
+                    self.pc += 1;
+                },
                 Instr::Bye => {
                     return Ok(ForthResult::Bye);
                 },
@@ -6225,6 +6248,9 @@ test3 test4").unwrap();
     fn begin_again_loop() {
         let mut forth = ToyForth::new();
 
+        forth.interpret("NOP").unwrap();
+        let default_rstack_depth = forth.rstack_depth();
+
         forth.interpret("\
 : BAR 3
     BEGIN
@@ -6241,7 +6267,7 @@ BAR
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         assert_eq!(forth.pop_int().unwrap(), 33);
     }
@@ -6249,6 +6275,9 @@ BAR
     #[test]
     fn begin_until_loop() {
         let mut forth = ToyForth::new();
+
+        forth.interpret("NOP").unwrap();
+        let default_rstack_depth = forth.rstack_depth();
 
         forth.interpret("\
 : BAR 3
@@ -6265,7 +6294,7 @@ BAR
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         assert_eq!(forth.pop_int().unwrap(), 33);
     }
@@ -6273,6 +6302,9 @@ BAR
     #[test]
     fn begin_while_loop() {
         let mut forth = ToyForth::new();
+
+        forth.interpret("NOP").unwrap();
+        let default_rstack_depth = forth.rstack_depth();
 
         forth.interpret("\
 : BAR
@@ -6293,7 +6325,7 @@ BAR
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         assert_eq!(forth.pop_int().unwrap(), 30);
     }
@@ -6301,6 +6333,9 @@ BAR
     #[test]
     fn do_loop_with_leave() {
         let mut forth = ToyForth::new();
+
+        forth.interpret("NOP").unwrap();
+        let default_rstack_depth = forth.rstack_depth();
 
         forth.interpret("\
 : BAR
@@ -6322,14 +6357,14 @@ BAR
         forth.interpret("5 BAR").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         assert_eq!(forth.pop_int().unwrap(), 125);
 
         forth.interpret("2 BAR").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         assert_eq!(forth.pop_int().unwrap(), 128);
     }
@@ -6337,6 +6372,9 @@ BAR
     #[test]
     fn loop_unloop_exit() {
         let mut forth = ToyForth::new();
+
+        forth.interpret("NOP").unwrap();
+        let default_rstack_depth = forth.rstack_depth();
 
         forth.interpret("\
 : TEST ( num1 niter -- num2 iters )
@@ -6360,7 +6398,7 @@ BAR
         // 5                66 + 4 + 1 = 71
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 71);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
         assert_eq!(forth.cstack_depth(), 0);
     }
 
@@ -6408,6 +6446,9 @@ VARIABLE iter
     fn plus_bang() {
         let mut forth = ToyForth::new();
 
+        forth.interpret("NOP").unwrap();
+        let default_rstack_depth = forth.rstack_depth();
+
         forth.interpret("\
 VARIABLE FOO
 3 FOO !
@@ -6417,7 +6458,7 @@ FOO @
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         assert_eq!(forth.pop_int().unwrap(), 8);
     }
@@ -6458,6 +6499,9 @@ FOO @
         let mut forth = ToyForth::new();
         let outv = Rc::new(RefCell::new(Vec::<u8>::new()));
 
+        forth.interpret("NOP").unwrap();
+        let default_rstack_depth = forth.rstack_depth();
+
         forth.capture_interpret("\
 : FACTORIAL  .( Computes factorial )
     ( n1 -- n2 )
@@ -6479,7 +6523,7 @@ FOO @
 
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         assert_eq!(forth.pop_int().unwrap(), 120);
     }
@@ -6973,6 +7017,9 @@ ACTION-OF defer3
     fn case_switches() {
         let mut forth = ToyForth::new();
 
+        forth.interpret("NOP").unwrap();
+        let default_rstack_depth = forth.rstack_depth();
+
         forth.interpret("\
 : cs1 CASE 1 OF 111 ENDOF
    2 OF 222 ENDOF
@@ -6987,37 +7034,37 @@ ACTION-OF defer3
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 111);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         forth.interpret("2 cs1").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 222);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         forth.interpret("3 cs1").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 333);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         forth.interpret("4 cs1").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 999);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         forth.interpret("-1501 cs1").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 999);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
 
         forth.interpret("17 cs1").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 999);
         assert_eq!(forth.cstack_depth(), 0);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
     }
 
     #[test]
@@ -7158,6 +7205,9 @@ vd1").unwrap();
     fn two_word_stack_functions() {
         let mut forth = ToyForth::new();
 
+        forth.interpret("NOP").unwrap();
+        let default_rstack_depth = forth.rstack_depth();
+
         forth.interpret("1 2 3 2DROP .S").unwrap();
         assert_eq!(forth.stack_depth(), 1);
         assert_eq!(forth.pop_int().unwrap(), 1);
@@ -7188,7 +7238,7 @@ vd1").unwrap();
 
         forth.interpret(": FOO 0 1 2>R 2 3 2R> ; FOO").unwrap();
         assert_eq!(forth.stack_depth(), 4);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
         assert_eq!(forth.pop_int().unwrap(), 1);
         assert_eq!(forth.pop_int().unwrap(), 0);
         assert_eq!(forth.pop_int().unwrap(), 3);
@@ -7196,7 +7246,7 @@ vd1").unwrap();
 
         forth.interpret(": BAR 0 1 2>R 2R@ 2R> ; BAR").unwrap();
         assert_eq!(forth.stack_depth(), 4);
-        assert_eq!(forth.rstack_depth(), 0);
+        assert_eq!(forth.rstack_depth(), default_rstack_depth);
         assert_eq!(forth.pop_int().unwrap(), 1);
         assert_eq!(forth.pop_int().unwrap(), 0);
         assert_eq!(forth.pop_int().unwrap(), 1);
