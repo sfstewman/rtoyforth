@@ -524,7 +524,8 @@ impl DictEntry {
 
 struct ToyForth<'tf> {
     dstack: Vec<Word>,
-    rstack: Vec<Word>,
+    rstack: Vec<XT>,
+    aux_stack: Vec<Word>,
     cstack: Vec<ControlEntry>,
     ufuncs: Vec<ForthFunc<'tf>>,
     funcnames: Vec<String>,
@@ -901,6 +902,7 @@ impl<'tf> ToyForth<'tf> {
         let mut tf = ToyForth{
             dstack:  std::vec::Vec::new(),
             rstack:  std::vec::Vec::new(),
+            aux_stack: std::vec::Vec::new(),
             cstack:  std::vec::Vec::new(),
             ufuncs:  std::vec::Vec::new(),
             funcnames: std::vec::Vec::new(),
@@ -1540,7 +1542,7 @@ CREATE REPL-PROMPT 2 ALLOT
         }
 
         let rstack = {
-            let mut rstack : Vec<XT> = self.rstack.iter().filter_map(|w| w.to_xt()).collect();
+            let mut rstack : Vec<XT> = self.rstack.iter().map(|xt| *xt).collect();
 
             // first stack frame is pc
             rstack.push(XT(self.pc));
@@ -1698,8 +1700,8 @@ CREATE REPL-PROMPT 2 ALLOT
         }
         if self.rstack.len() > 0 {
             eprintln!("\nReturn:");
-            for (i,w) in self.rstack.iter().enumerate() {
-                eprintln!("[R {:3}] {}", i,w);
+            for (i,xt) in self.rstack.iter().enumerate() {
+                eprintln!("[R {:3}] {}", i,xt.to_word());
             }
         }
         if self.cstack.len() > 0 {
@@ -1996,7 +1998,7 @@ CREATE REPL-PROMPT 2 ALLOT
                     break;
                 }
 
-                self.data_to_ret()?;    // ( caddr u -- caddr )           r: ( -- u )
+                self.data_to_aux()?;    // ( caddr u -- caddr )           r: ( -- u )
                 self.dup()?;                    // ( caddr -- caddr caddr )       r: ( u -- u )
                 self.builtin_char_at()?;        // ( caddr caddr -- caddr ch )    r: ( u -- u )
                 self.push_int('-' as i32)?;     // ( caddr ch -- caddr ch '-' )   r: ( u -- u )
@@ -2006,19 +2008,19 @@ CREATE REPL-PROMPT 2 ALLOT
 
                 if self.pop_int()? != 0 {       // ( neg? caddr neg? -- neg? caddr ) r: ( u -- u )
                     self.builtin_char_plus()?;  // ( neg? caddr -- neg? caddr2 )
-                    self.ret_to_data()?; // ( neg? caddr2 -- neg? caddr2 u ) r: ( u -- )
+                    self.aux_to_data()?; // ( neg? caddr2 -- neg? caddr2 u ) r: ( u -- )
                     let u = self.pop_int()?;    // ( neg? caddr2 u -- neg? caddr2 ) r: ( -- )
                     self.push_int(u - 1)?;      // ( neg? caddr2 -- neg? caddr2 u2 ) r: ( -- )
 
                     len -= 1;
 
-                    self.data_to_ret()?;    // ( neg? caddr2 u2 -- neg? caddr2 )  r: ( -- u2 )
+                    self.data_to_aux()?;    // ( neg? caddr2 u2 -- neg? caddr2 )  r: ( -- u2 )
                 }
 
                 self.push_int(0)?;              // ( neg? caddr -- neg? caddr 0 ) r: ( u -- u )
                 self.swap()?;                   // ( neg? caddr 0 -- neg? 0 caddr ) r: ( u -- u )
 
-                self.ret_to_data()?;    // ( neg? 0 caddr -- neg? 0 caddr u ) r: ( u -- )
+                self.aux_to_data()?;    // ( neg? 0 caddr -- neg? 0 caddr u ) r: ( u -- )
 
                 self.builtin_to_number()?;      // ( neg? 0 caddr u1 -- neg? ud caddr u2 )
 
@@ -2208,6 +2210,10 @@ CREATE REPL-PROMPT 2 ALLOT
 
     pub fn rstack_depth(&self) -> usize {
         return self.rstack.len();
+    }
+
+    pub fn aux_stack_depth(&self) -> usize {
+        return self.aux_stack.len();
     }
 
     pub fn code_size(&self) -> u32 {
@@ -2767,20 +2773,20 @@ CREATE REPL-PROMPT 2 ALLOT
         }
     }
 
-    fn data_to_ret(&mut self) -> Result<(), ForthError> {
+    fn data_to_aux(&mut self) -> Result<(), ForthError> {
         let w = self.dstack.pop().ok_or(ForthError::StackUnderflow)?;
-        self.rstack.push(w);
+        self.aux_stack.push(w);
         Ok(())
     }
 
-    fn ret_to_data(&mut self) -> Result<(), ForthError> {
-        let w = self.rstack.pop().ok_or(ForthError::StackUnderflow)?;
+    fn aux_to_data(&mut self) -> Result<(), ForthError> {
+        let w = self.aux_stack.pop().ok_or(ForthError::StackUnderflow)?;
         self.dstack.push(w);
         Ok(())
     }
 
-    fn ret_copy_to_data(&mut self) -> Result<(), ForthError> {
-        let w = self.rstack.last().ok_or(ForthError::StackUnderflow)?;
+    fn aux_copy_to_data(&mut self) -> Result<(), ForthError> {
+        let w = self.aux_stack.last().ok_or(ForthError::StackUnderflow)?;
         self.dstack.push(*w);
         Ok(())
     }
@@ -3444,13 +3450,13 @@ CREATE REPL-PROMPT 2 ALLOT
     }
 
     fn ret_push(&mut self, xt: XT) -> Result<(),ForthError> {
-        self.rstack.push(xt.to_word());
+        self.rstack.push(xt);
         Ok(())
     }
 
     fn ret_push_bye(&mut self) -> Result<(),ForthError> {
         let bye_xt = self.lookup_bye()?;
-        self.rstack.push(bye_xt.to_word());
+        self.rstack.push(bye_xt);
         Ok(())
     }
 
@@ -5085,20 +5091,21 @@ CREATE REPL-PROMPT 2 ALLOT
                     self.pc += 1;
                 },
                 Instr::ReturnPush => {
-                    self.data_to_ret()?;
+                    self.data_to_aux()?;
                     self.pc += 1;
                 },
                 Instr::ReturnPop => {
-                    self.ret_to_data()?;
+                    self.aux_to_data()?;
                     self.pc += 1;
                 },
                 Instr::ReturnCopy => {
-                    self.ret_copy_to_data()?;
+                    self.aux_copy_to_data()?;
                     self.pc += 1;
                 },
                 Instr::Execute => {
                     let xt = self.pop_xt()?;
-                    self.rstack.push(Word::xt(self.pc+1));
+                    // TODO: check range
+                    self.rstack.push(XT(self.pc+1));
                     self.pc = xt.0;
                 },
                 Instr::UnaryOp(op) => {
@@ -5123,7 +5130,8 @@ CREATE REPL-PROMPT 2 ALLOT
                 },
 
                 Instr::DoCol(new_pc) => {
-                    self.rstack.push(Word::xt(self.pc+1));
+                    // TODO: check range
+                    self.rstack.push(XT(self.pc+1));
                     self.pc = new_pc.0;
                 },
                 Instr::Refill => {
@@ -5138,8 +5146,7 @@ CREATE REPL-PROMPT 2 ALLOT
                     return Ok(ForthResult::Refill);
                 },
                 Instr::Exit|Instr::Unnest => {
-                    let val = self.rstack.pop().ok_or(ForthError::ReturnStackUnderflow)?;
-                    let ret = val.to_xt().ok_or_else(|| ForthError::InvalidExecutionToken(val))?;
+                    let ret = self.rstack.pop().ok_or(ForthError::ReturnStackUnderflow)?;
                     self.pc = ret.0;
                 },
             }
@@ -5711,8 +5718,8 @@ mod tests {
         let mut forth = ToyForth::new();
 
         // handle underflow
-        assert!(matches!(forth.data_to_ret().unwrap_err(), ForthError::StackUnderflow));
-        assert!(matches!(forth.ret_to_data().unwrap_err(), ForthError::StackUnderflow));
+        assert!(matches!(forth.data_to_aux().unwrap_err(), ForthError::StackUnderflow));
+        assert!(matches!(forth.aux_to_data().unwrap_err(), ForthError::StackUnderflow));
 
         forth.push_int(1).unwrap();
         forth.push_int(2).unwrap();
@@ -5720,18 +5727,20 @@ mod tests {
         assert_eq!(forth.stack_depth(), 2);
         assert_eq!(forth.rstack_depth(), 0);
 
-        forth.data_to_ret().unwrap();
+        forth.data_to_aux().unwrap();
 
         assert_eq!(forth.stack_depth(), 1);
-        assert_eq!(forth.rstack_depth(), 1);
+        assert_eq!(forth.aux_stack_depth(), 1);
+        assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.dstack.last().map(|x| *x).unwrap(), Word::int(1));
-        assert_eq!(forth.rstack.last().map(|x| *x).unwrap(), Word::int(2));
+        assert_eq!(forth.aux_stack.last().map(|x| *x).unwrap(), Word::int(2));
 
         forth.push_int(3).unwrap();
-        forth.ret_to_data().unwrap();
+        forth.aux_to_data().unwrap();
 
         assert_eq!(forth.stack_depth(), 3);
+        assert_eq!(forth.aux_stack_depth(), 0);
         assert_eq!(forth.rstack_depth(), 0);
 
         assert_eq!(forth.pop_int().unwrap(), 2);
