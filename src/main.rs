@@ -1,9 +1,39 @@
 use std::rc::Rc;
 use std::cell::RefCell;
 
+// Basic rtoyforth value: the 32-bit word.
+//
+// Words can hold integer values, execution tokens, string tokens, or variable addresses.
+//
+//   - Single word integers are 31-bit signed values.
+//   - Execution tokens point to a location in the code dictionary
+//   - String tokens hold an offset/length, either in allocated string
+//     space or in one of several scratch spaces
+//   - Variable addresses are an offset into the variable address space
+//
+// Internal structure:
+//
+//
+//                              1         2          3
+// bit                01234567890123456789012345678901
+// integer            IIIIIIIIIIIIIIIIIIIIIIIIIIIIIII0
+// string token       SSSSSSSSSSSSSSSSSSSSSSSSSSSSSS01
+// executable token   XXXXXXXXXXXXXXXXXXXXXXXXXXXXX011
+// variable address   AAAAAAAAAAAAAAAAAAAAAAAAAAAAA111
+//
+// Notes:
+// - The three MSBs indicate the type.
+// - If bit 31 is 0, the remaining bits are interpreted as a signed integer.
+// - If bit 31 is 1:
+//   - If bit 30 is 0, then the remaining bits are interpreted as a string token.
+//   - If bit 30 is 1:
+//     - If bit 29 is 0, the remaining bits are intreprted as an executable token (XT)
+//     - If bit 29 is 1, the remaining bits are intreprted as a variable address
+//
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 struct Word(u32);
 
+// eXecution Token, points to an execution point in the code dictionary
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 struct XT(u32);
 
@@ -36,9 +66,23 @@ impl VarAddr {
     }
 }
 
+// Length/offset pair for scratch space string tokens
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 struct ScratchLoc{len:u8, off:u8}
 
+// String token.  Offset and length into one of several spaces.
+//
+// Allocated   offset/length into the allocated strings space.
+//             offset is 24-bit, length is 8-bit
+//
+// The remaining spaces are the usual 256-byte scratch spaces availabe in
+// various Forth systems:
+//
+// PadSpace    offset/length in pad space (accessed with PAD)
+// WordSpace   offset/length in word space
+// InputSpace  offset/length in input space
+// PicSpace    offset/length in picture space
+//
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 enum ST {
     // TODO: Check size.  This needs to fit in 32 bits.
@@ -71,14 +115,30 @@ impl ST {
 
     fn from_u32(val: u32) -> Result<ST,ForthError> {
         // check for valid string encoding
+
+        // All string tokens must have bit 31 set and bit 30 cleared.
         if (val & Word::HIGH_BIT) == 0 || (val & Word::SIGN_BIT) == 1 {
             return Err(ForthError::InvalidStringValue(val));
         }
 
+        // Bit 29 is the SCRATCH_BIT.  If it is cleared, then this is
+        // an allocated string.
         if (val & ST::SCRATCH_BIT) == 0 {
             return Ok(ST::Allocated(val & ST::MASK));
         }
 
+        // Bit 29 is set, so it's a scratch string:
+        //
+        //                 1         2          3
+        // bits  01234567890123456789012345678 901
+        //       OOOOOOOOLLLLLLLLWWWWWWWWWWWWW 101
+        //
+        // O - offset into scratch space (8 bits)
+        // L - length in scratch space (8 bits)
+        // W - which scratch space
+        //
+        // Only four scratch spaces are supported right now: PAD, WORD, INPUT, and PIC.
+        //
         match (val & ST::LOC_MASK) >> 16 {
             0 => Ok(ST::pad_space((val & ST::OFF_MASK) as u8, ((val & ST::LEN_MASK) >> 8) as u8)),
             1 => Ok(ST::word_space((val & ST::OFF_MASK) as u8, ((val & ST::LEN_MASK) >> 8) as u8)),
@@ -88,6 +148,7 @@ impl ST {
         }
     }
 
+    // Offset of the string token in its address space
     fn addr(self) -> u32 {
         match self {
             ST::Allocated(val) => {
@@ -99,6 +160,7 @@ impl ST {
         }
     }
 
+    // Length of string represented by the string token
     fn len(self) -> u32 {
         match self {
             ST::Allocated(val) => {
@@ -110,6 +172,7 @@ impl ST {
         }
     }
 
+    // Advances the string token forward by `by` bytes
     fn offset(self, by: u8) -> ST {
         let addr = self.addr();
         let len  = self.len();
@@ -214,6 +277,7 @@ impl ST {
         Word(v | ST::ST_BITS)
     }
 
+    // Description of the string token, for debugging
     fn descr(self) -> std::string::String {
         let w = self.to_word();
         match self {
@@ -236,6 +300,9 @@ impl ST {
     }
 }
 
+// General address type: either a variable address or a character address (string token).
+// Attempt at a reasonable abstraction over ANS Forth a-addr / c-addr definitions.
+//
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 enum Addr {
     Var(VarAddr),
@@ -252,6 +319,8 @@ impl Addr {
     }
 }
 
+// Enum for the type of data in the word.  Includes value to make it easy
+// to decode and use in a match or if-let
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 enum WordKind {
     Int(i32),
@@ -394,12 +463,18 @@ impl<'tf> PartialEq for ForthFunc<'tf> {
 
 impl<'tf> Eq for ForthFunc<'tf> { }
 
+// Result of call into Forth interpreter via exec()
+//
+// Bye      interpreter is finished and should exit
+// Refill   interpreter is awaiting more input
+//
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum ForthResult {
     Bye,
     Refill,
 }
 
+// Builtin VM instructions
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum Instr {
     Empty,
@@ -435,6 +510,7 @@ enum Instr {
     Unnest,
 }
 
+// Unary operations for integers
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 #[repr(u8)]
 enum UnaryOp {
@@ -442,6 +518,9 @@ enum UnaryOp {
     Invert,
 }
 
+// Binary operations on integers
+//
+// Bitwise operations treat the value as an unsigned 31-bit integer
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 #[repr(u8)]
 enum BinOp {
@@ -470,12 +549,14 @@ enum BinOp {
     RightShift,
 }
 
+// used to compile DO ... LOOP and related
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 struct DoInfo {
     head: XT,
     qdo: Option<XT>,
 }
 
+// Control stack entries while compiling
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum ControlEntry {
     IfAddr(XT),
@@ -492,6 +573,9 @@ enum ControlEntry {
     Index(i32),
 }
 
+// Dictionary entry
+//
+// Indicates whether the forth 
 #[derive(Debug,Clone,Copy)]
 struct DictEntry {
     st: ST,
