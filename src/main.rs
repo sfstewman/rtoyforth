@@ -3952,9 +3952,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
-    fn builtin_body(&mut self) -> Result<(), ForthError> {
-        let xt = self.pop_xt()?;
-
+    pub fn lookup_var_addr_by_xt(&self, xt: XT) -> Result<VarAddr, ForthError> {
         let addr = xt.0 as usize;
         if addr >= self.code.len() {
             return Err(ForthError::InvalidPC(xt.0));
@@ -3962,11 +3960,18 @@ CREATE REPL-PROMPT 2 ALLOT
 
         if let Instr::Push(w) = self.code[addr] {
             let addr = w.to_addr().ok_or(ForthError::InvalidCell(xt))?;
-            self.push(addr.to_cell())?;
-            return Ok(());
+            return Ok(addr);
         } else {
             return Err(ForthError::InvalidCell(xt));
         }
+    }
+
+    fn builtin_body(&mut self) -> Result<(), ForthError> {
+        let xt = self.pop_xt()?;
+
+        let addr = self.lookup_var_addr_by_xt(xt)?;
+        self.push(addr.to_cell())?;
+        Ok(())
     }
 
     fn builtin_empty_return(&mut self) -> Result<(), ForthError> {
