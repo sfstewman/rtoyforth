@@ -1,11 +1,11 @@
 use std::rc::Rc;
 use std::cell::RefCell;
 
-// Basic rtoyforth value: the 32-bit word.
+// Basic rtoyforth value: the 32-bit cell.
 //
-// Words can hold integer values, execution tokens, string tokens, or variable addresses.
+// Cell values can hold integer values, execution tokens, string tokens, or variable addresses.
 //
-//   - Single word integers are 31-bit signed values.
+//   - Single cell integers are 31-bit signed values.
 //   - Execution tokens point to a location in the code dictionary
 //   - String tokens hold an offset/length, either in allocated string
 //     space or in one of several scratch spaces
@@ -31,7 +31,7 @@ use std::cell::RefCell;
 //     - If bit 29 is 1, the remaining bits are intreprted as a variable address
 //
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
-struct Word(u32);
+struct Cell(u32);
 
 // eXecution Token, points to an execution point in the code dictionary
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
@@ -41,10 +41,10 @@ impl XT {
     const MAX : u32 = 0x1fff_ffff;
     const MIN : u32 = 0;
     const MASK : u32 = 0x1fff_ffff;
-    const BITS : u32 = Word::HIGH_BIT | Word::SIGN_BIT;
+    const BITS : u32 = Cell::HIGH_BIT | Cell::SIGN_BIT;
 
-    fn to_word(self) -> Word {
-        Word::xt(self.0)
+    fn to_cell(self) -> Cell {
+        Cell::xt(self.0)
     }
 }
 
@@ -58,11 +58,11 @@ impl VarAddr {
     const MIN : u32 = 0;
     const MASK : u32 = 0x1fff_ffff;
     const ADDR_BIT : u32 = 0x2000_0000;
-    const BITS : u32 = Word::HIGH_BIT | Word::SIGN_BIT | VarAddr::ADDR_BIT;
+    const BITS : u32 = Cell::HIGH_BIT | Cell::SIGN_BIT | VarAddr::ADDR_BIT;
 
-    fn to_word(self) -> Word {
+    fn to_cell(self) -> Cell {
         // XXX: check mask
-        Word(VarAddr::BITS | self.0)
+        Cell(VarAddr::BITS | self.0)
     }
 }
 
@@ -98,7 +98,7 @@ impl ST {
     const MAX : u32 = 0x3fff_ffff;
     const MIN : u32 = 0;
     const MASK : u32 = 0x3fff_ffff;
-    const BITS : u32 = Word::HIGH_BIT;
+    const BITS : u32 = Cell::HIGH_BIT;
 
     // Indicates string scratch space
     const SCRATCH_BIT : u32 = 0x2000_0000;
@@ -108,7 +108,7 @@ impl ST {
     const LEN_MASK : u32 = 0x0000_ff00;
     const OFF_MASK : u32 = 0x0000_00ff;
 
-    const ST_BITS : u32 = Word::HIGH_BIT;
+    const ST_BITS : u32 = Cell::HIGH_BIT;
 
     const MAX_LENGTH : usize = 255;
     const MAX_OFFSET : usize = ST::ALLOC_MASK as usize;
@@ -117,7 +117,7 @@ impl ST {
         // check for valid string encoding
 
         // All string tokens must have bit 31 set and bit 30 cleared.
-        if (val & Word::HIGH_BIT) == 0 || (val & Word::SIGN_BIT) == 1 {
+        if (val & Cell::HIGH_BIT) == 0 || (val & Cell::SIGN_BIT) == 1 {
             return Err(ForthError::InvalidStringValue(val));
         }
 
@@ -251,7 +251,7 @@ impl ST {
         ST::PicSpace(ScratchLoc{off:off, len:len})
     }
 
-    fn to_word(self) -> Word {
+    fn to_cell(self) -> Cell {
         let v : u32 = match self {
             ST::Allocated(off) => {
                 if (ST::ALLOC_MASK & off) != off {
@@ -274,12 +274,12 @@ impl ST {
             },
         };
 
-        Word(v | ST::ST_BITS)
+        Cell(v | ST::ST_BITS)
     }
 
     // Description of the string token, for debugging
     fn descr(self) -> std::string::String {
-        let w = self.to_word();
+        let w = self.to_cell();
         match self {
             ST::Allocated(_) => {
                 format!("[st {}] allocated[addr={}, len={}]", w.0, self.addr(), self.len())
@@ -317,19 +317,26 @@ impl Addr {
     fn a_addr(&self) -> Option<VarAddr> {
         if let Addr::Var(v) = self { Some(*v) } else { None }
     }
+
+    fn to_cell(&self) -> Cell {
+        match self {
+            Addr::Char(caddr) => { caddr.to_cell() },
+            Addr::Var(vaddr)  => { vaddr.to_cell() },
+        }
+    }
 }
 
-// Enum for the type of data in the word.  Includes value to make it easy
+// Enum for the type of data in the cell.  Includes value to make it easy
 // to decode and use in a match or if-let
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
-enum WordKind {
+enum CellKind {
     Int(i32),
     XT(XT),
     Str(ST),
     VarAddr(VarAddr),
 }
 
-impl Word {
+impl Cell {
     const HIGH_BIT : u32 = 0x8000_0000;
     const SIGN_BIT : u32 = 0x4000_0000;
     const INT_MASK : u32 = 0x7fff_ffff;
@@ -339,88 +346,88 @@ impl Word {
     const INT_MIN  : i32 = -1073741824;
     const INT_MAX  : i32 =  1073741823;
 
-    const UINT_MAX : u32 =  Word::INT_MASK;
+    const UINT_MAX : u32 =  Cell::INT_MASK;
 
     const XT_MASK  : u32 = 0x1fff_ffff;
     const STR_MASK : u32 = 0x3fff_ffff;
-    const XT_BITS  : u32 = Word::HIGH_BIT | Word::SIGN_BIT;
-    const STR_BITS : u32 = Word::HIGH_BIT;
+    const XT_BITS  : u32 = Cell::HIGH_BIT | Cell::SIGN_BIT;
+    const STR_BITS : u32 = Cell::HIGH_BIT;
 
-    fn true_value() -> Word {
-        Word(Word::INT_MASK)
+    fn true_value() -> Cell {
+        Cell(Cell::INT_MASK)
     }
 
-    fn false_value() -> Word {
-        Word(0)
+    fn false_value() -> Cell {
+        Cell(0)
     }
 
-    fn bool(b: bool) -> Word {
-        if b { Word::true_value() } else { Word::false_value() }
+    fn bool(b: bool) -> Cell {
+        if b { Cell::true_value() } else { Cell::false_value() }
     }
 
-    fn int(x: i32) -> Word {
+    fn int(x: i32) -> Cell {
         // TODO: range check
-        Word((x as u32) & Word::INT_MASK)
+        Cell((x as u32) & Cell::INT_MASK)
     }
 
-    fn xt(x: u32) -> Word {
+    fn xt(x: u32) -> Cell {
         // TODO: range check
-        Word((x & Word::XT_MASK) | Word::XT_BITS)
+        Cell((x & Cell::XT_MASK) | Cell::XT_BITS)
     }
 
-    fn str(x: u32) -> Word {
+    fn str(x: u32) -> Cell {
         // TODO: range check
-        Word((x & Word::STR_MASK) | Word::STR_BITS)
+        Cell((x & Cell::STR_MASK) | Cell::STR_BITS)
     }
 
-    fn addr(x: u32) -> Word {
-        VarAddr(x).to_word()
+    fn addr(x: u32) -> Cell {
+        VarAddr(x).to_cell()
     }
 
-    pub fn from_xt(xt: XT) -> Word {
-        Word::xt(xt.0)
+    pub fn from_xt(xt: XT) -> Cell {
+        Cell::xt(xt.0)
     }
 
-    pub fn from_str(st: ST) -> Word {
-        st.to_word()
+    pub fn from_str(st: ST) -> Cell {
+        st.to_cell()
     }
 
-    pub fn from_addr(addr: VarAddr) -> Word {
-        addr.to_word()
+    pub fn from_addr(addr: VarAddr) -> Cell {
+        addr.to_cell()
     }
 
-    pub fn kind(self) -> WordKind {
+    pub fn kind(self) -> CellKind {
         match self.0 {
-            x if (x & Word::HIGH_BIT) == 0 => { WordKind::Int((x | ((x & Word::SIGN_BIT) << 1)) as i32) },
-            x if (x & Word::SIGN_BIT) == 0 => {
+            x if (x & Cell::HIGH_BIT) == 0 => { CellKind::Int((x | ((x & Cell::SIGN_BIT) << 1)) as i32) },
+            x if (x & Cell::SIGN_BIT) == 0 => {
                 // FIXME: unwrap!
-                WordKind::Str(ST::from_u32(x).unwrap())
+                CellKind::Str(ST::from_u32(x).unwrap())
             },
             x if (x & VarAddr::ADDR_BIT) != 0 => {
-                WordKind::VarAddr(VarAddr(x & VarAddr::MASK))
+                CellKind::VarAddr(VarAddr(x & VarAddr::MASK))
             }
-            x => { WordKind::XT(XT(x & Word::XT_MASK)) },
+            x => { CellKind::XT(XT(x & Cell::XT_MASK)) },
         }
     }
 
     pub fn to_int(self) -> Option<i32> {
-        if let WordKind::Int(x) = self.kind() { Some(x) } else { None }
+        if let CellKind::Int(x) = self.kind() { Some(x) } else { None }
     }
 
     pub fn to_xt(self) -> Option<XT> {
-        if let WordKind::XT(x) = self.kind() { Some(x) } else { None }
+        if let CellKind::XT(x) = self.kind() { Some(x) } else { None }
     }
 
     pub fn to_str(self) -> Option<ST> {
-        if let WordKind::Str(x) = self.kind() { Some(x) } else { None }
+        if let CellKind::Str(x) = self.kind() { Some(x) } else { None }
     }
 
     pub fn to_addr(self) -> Option<VarAddr> {
-        if let WordKind::VarAddr(x) = self.kind() { Some(x) } else { None }
+        if let CellKind::VarAddr(x) = self.kind() { Some(x) } else { None }
     }
 
     pub fn to_char(self) -> Result<u8, ForthError> {
-        if let WordKind::Int(x) = self.kind() {
+        if let CellKind::Int(x) = self.kind() {
             if x < 0 && x > (u8::MAX as i32) {
                 return Err(ForthError::InvalidChar(x));
             }
@@ -432,13 +439,13 @@ impl Word {
     }
 }
 
-impl std::fmt::Display for Word {
+impl std::fmt::Display for Cell {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self.kind() {
-            WordKind::Int(x) => { formatter.write_fmt(format_args!("[int] {}", x)) },
-            WordKind::XT(XT(x))  => { formatter.write_fmt(format_args!("[xt] {}", x)) },
-            WordKind::VarAddr(VarAddr(x))  => { formatter.write_fmt(format_args!("[addr] {}", x)) },
-            WordKind::Str(st) => {
+            CellKind::Int(x) => { formatter.write_fmt(format_args!("[int] {}", x)) },
+            CellKind::XT(XT(x))  => { formatter.write_fmt(format_args!("[xt] {}", x)) },
+            CellKind::VarAddr(VarAddr(x))  => { formatter.write_fmt(format_args!("[addr] {}", x)) },
+            CellKind::Str(st) => {
                 match st {
                     ST::Allocated(v) => {
                         formatter.write_fmt(format_args!("[str:alloc] @ {} len={},addr={}", v, st.len(), st.addr())) },
@@ -480,7 +487,7 @@ enum Instr {
     Empty,
     Nop,
     Bye,
-    Push(Word),
+    Push(Cell),
     Drop,
     Pick,
     Roll,
@@ -607,15 +614,15 @@ impl DictEntry {
 }
 
 struct ToyForth<'tf> {
-    dstack: Vec<Word>,
+    dstack: Vec<Cell>,
     rstack: Vec<XT>,
-    aux_stack: Vec<Word>,
+    aux_stack: Vec<Cell>,
     cstack: Vec<ControlEntry>,
     ufuncs: Vec<ForthFunc<'tf>>,
     funcnames: Vec<String>,
 
     dict: Vec<DictEntry>,
-    vars: Vec<Word>,
+    vars: Vec<Cell>,
     strings: std::vec::Vec<u8>,
     code: Vec<Instr>,
 
@@ -685,12 +692,12 @@ enum ForthError {
 
     WordNotFound(ST),
 
-    InvalidArgument(Word),
+    InvalidArgument(Cell),
     InvalidCell(XT),
     InvalidControlEntry(ControlEntry),
-    InvalidIndex(Word),
+    InvalidIndex(Cell),
     InvalidControlInstruction(XT),
-    InvalidExecutionToken(Word),
+    InvalidExecutionToken(Cell),
     InvalidString(ST),
     InvalidEscape(char),
     InvalidChar(i32),
@@ -704,11 +711,11 @@ enum ForthError {
 
     InvalidErrorCode(u32),
 
-    ExpectedXT(Word),
-    ExpectedString(Word),
-    ExpectedInteger(Word),
-    ExpectedVarAddr(Word),
-    ExpectedAddr(Word),
+    ExpectedXT(Cell),
+    ExpectedString(Cell),
+    ExpectedInteger(Cell),
+    ExpectedVarAddr(Cell),
+    ExpectedAddr(Cell),
 
     IOError(std::io::Error),
 }
@@ -772,7 +779,7 @@ impl ForthError {
     const EXPECTED_ADDR                     : u32 = 151;
     const IO_ERROR                          : u32 = 152;
 
-    fn from_code(code: u32, arg: Word) -> Result<ForthError,ForthError> {
+    fn from_code(code: u32, arg: Cell) -> Result<ForthError,ForthError> {
         let err = match code {
             ForthError::STACK_UNDERFLOW                 => ForthError::StackUnderflow,
             ForthError::CONTROL_STACK_UNDERFLOW         => ForthError::ControlStackUnderflow,
@@ -1094,7 +1101,7 @@ impl<'tf> ToyForth<'tf> {
         tf.add_func("ABORT", ToyForth::builtin_abort);
 
         // words that may be replaced with Forth definitions at some point
-        tf.add_prim("BL", Instr::Push(Word::int(' ' as i32)));
+        tf.add_prim("BL", Instr::Push(Cell::int(' ' as i32)));
         tf.add_func("CHAR", ToyForth::builtin_char);
         tf.add_func("WORD", ToyForth::builtin_word);
         tf.add_func("C!", ToyForth::builtin_char_bang);
@@ -1223,15 +1230,15 @@ impl<'tf> ToyForth<'tf> {
         //
         let state_vars = vec![ "STATE", "BASE", "/CDEF", "/CXT", "/BRACKET" ];
         for v in &state_vars {
-            let addr = tf.new_var(Word(0)).unwrap();
-            tf.add_prim(v, Instr::Push(addr.to_word()));
+            let addr = tf.new_var(Cell(0)).unwrap();
+            tf.add_prim(v, Instr::Push(addr.to_cell()));
         }
 
-        tf.set_var_at(ToyForth::ADDR_BASE, Word::int(10)).unwrap();
+        tf.set_var_at(ToyForth::ADDR_BASE, Cell::int(10)).unwrap();
 
         // Add builtins
-        tf.add_prim(">IN",    Instr::Push(ToyForth::ADDR_IN.to_word()));
-        tf.add_prim("/OPTIMIZE", Instr::Push(ToyForth::ADDR_OPTIMIZE.to_word()));
+        tf.add_prim(">IN",    Instr::Push(ToyForth::ADDR_IN.to_cell()));
+        tf.add_prim("/OPTIMIZE", Instr::Push(ToyForth::ADDR_OPTIMIZE.to_cell()));
 
         tf.add_func("DEPTH",  ToyForth::builtin_depth);
         tf.add_func("CONTROL-DEPTH",  ToyForth::builtin_control_depth);
@@ -1243,7 +1250,7 @@ impl<'tf> ToyForth<'tf> {
 
         // define standard words that are not primitives
         tf.add_word("CR", &[
-            Instr::Push(Word::int('\n' as i32)),
+            Instr::Push(Cell::int('\n' as i32)),
             Instr::Func(emit as u32),
             Instr::Unnest,
         ], 0).unwrap();
@@ -1274,8 +1281,8 @@ impl<'tf> ToyForth<'tf> {
 : DECIMAL 10 BASE ! ;
 : HEX     16 BASE ! ;
 
-: ALIGN   ; \\ data-space words are always aligned
-: ALIGNED DUP DROP ; \\ data-space words are always aligned
+: ALIGN   ; \\ data-space entities are always aligned
+: ALIGNED DUP DROP ; \\ data-space entities are always aligned
 : CELLS   0 + ; \\ cells are each one address unit wide
 : CHARS   0 + ; \\ chars in a-addr space are also one unit wide
 
@@ -1417,6 +1424,7 @@ VARIABLE >PIC-STR
 
 VARIABLE LAST-WORD
 CREATE REPL-PROMPT 2 ALLOT
+
 : SET-DEFAULT-PROMPT S\" ok\" REPL-PROMPT 2! ;
 
 : PARSE-NUMBER  ( caddr u -- n 1 | caddr u 0 )
@@ -1491,6 +1499,7 @@ CREATE REPL-PROMPT 2 ALLOT
     /CLEAR-COMPILE-STATE
     BEGIN
         SHOW-PROMPT
+        \\ .\" ok\" CR
         REFILL IF
             /INTERPRET
             ( handle INTERPRET )
@@ -1503,7 +1512,7 @@ CREATE REPL-PROMPT 2 ALLOT
         // tf.add_func("PARSE-NAME", ToyForth::builtin_parse);
 
         eprintln!("Code cell size is {}", std::mem::size_of::<Instr>());
-        eprintln!("Data cell size is {}", std::mem::size_of::<Word>());
+        eprintln!("Data cell size is {}", std::mem::size_of::<Cell>());
 
         return tf;
     }
@@ -1705,7 +1714,7 @@ CREATE REPL-PROMPT 2 ALLOT
             }
             match instr {
                 Instr::Push(w) => {
-                    if let WordKind::Int(n) = w.kind() {
+                    if let CellKind::Int(n) = w.kind() {
                         eprintln!("{}[{:5}{}] {:30} {:6} |    Push([int] {})",
                             &indent_str, ind, highlight_char, istr, highlight_str, n);
                     } else {
@@ -1769,7 +1778,7 @@ CREATE REPL-PROMPT 2 ALLOT
         }
         for (i,w) in self.dstack.iter().enumerate() {
             let k = w.kind();
-            if let WordKind::Str(st) = k {
+            if let CellKind::Str(st) = k {
                 let s0 = self.maybe_string_at(st);
                 if let Ok(s) = s0 {
                     eprintln!("[D {:3}] {} \"{}\"", i,st.descr(), s);
@@ -1785,7 +1794,7 @@ CREATE REPL-PROMPT 2 ALLOT
         if self.rstack.len() > 0 {
             eprintln!("\nReturn:");
             for (i,xt) in self.rstack.iter().enumerate() {
-                eprintln!("[R {:3}] {}", i,xt.to_word());
+                eprintln!("[R {:3}] {}", i,xt.to_cell());
             }
         }
         if self.cstack.len() > 0 {
@@ -1894,7 +1903,7 @@ CREATE REPL-PROMPT 2 ALLOT
         // it doesn't...
         let w = self.get_var_at(ToyForth::ADDR_SLASH_BRACKET).unwrap();
 
-        if w == Word(0) {
+        if w == Cell(0) {
             Ok(())
         } else {
             Err(ForthError::DefiningWordInvalid)
@@ -1907,9 +1916,9 @@ CREATE REPL-PROMPT 2 ALLOT
         self.cstack.clear();
 
         // reset any definitions, enter compilation state
-        self.set_var_at(ToyForth::ADDR_STATE,      Word::int(0)).unwrap();
-        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0)).unwrap();
-        self.set_var_at(ToyForth::ADDR_SLASH_CXT,  Word(0)).unwrap();
+        self.set_var_at(ToyForth::ADDR_STATE,      Cell::int(0)).unwrap();
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Cell(0)).unwrap();
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT,  Cell(0)).unwrap();
     }
 
     pub fn builtin_raise_error(&mut self) -> Result<(), ForthError> {
@@ -1943,10 +1952,10 @@ CREATE REPL-PROMPT 2 ALLOT
 
             ForthError::WordNotFound(st) => {
                 if let Ok(s) = self.maybe_string_at(*st) {
-                    eprintln!("Word not found: {}", s);
+                    eprintln!("Cell not found: {}", s);
                 } else {
                     let b = self.bytes_at(*st);
-                    eprintln!("Word not found (bytes): {:?}", b);
+                    eprintln!("Cell not found (bytes): {:?}", b);
                 }
             },
             ForthError::InvalidArgument(w) => {
@@ -2065,7 +2074,7 @@ CREATE REPL-PROMPT 2 ALLOT
             self.builtin_parse()?;
             self.swap()?;
             self.last_word = self.pop_str()?;
-            self.push(self.last_word.to_word())?;
+            self.push(self.last_word.to_cell())?;
             self.swap()?;
             self.builtin_find_name()?;
 
@@ -2126,7 +2135,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
                 if is_compiling {
                     let num = self.pop_int()?;
-                    self.add_instr(Instr::Push(Word::int(num)));
+                    self.add_instr(Instr::Push(Cell::int(num)));
                 }
             } else {
                 let xt = self.pop_xt()?;
@@ -2767,26 +2776,26 @@ CREATE REPL-PROMPT 2 ALLOT
         self.maybe_string_at(st).unwrap()
     }
 
-    pub fn push(&mut self, w: Word) -> Result<(), ForthError> {
+    pub fn push(&mut self, w: Cell) -> Result<(), ForthError> {
         self.dstack.push(w);
         Ok(())
     }
 
     pub fn push_uint(&mut self, v: u32) -> Result<(), ForthError> {
-        if v > Word::UINT_MAX {
+        if v > Cell::UINT_MAX {
             return Err(ForthError::NumberOutOfRange);
         }
 
-        self.push(Word(v))?;
+        self.push(Cell(v))?;
         Ok(())
     }
 
     pub fn push_int(&mut self, v: i32) -> Result<(), ForthError> {
-        self.push(Word::int(v))
+        self.push(Cell::int(v))
     }
 
     pub fn push_str(&mut self, st: ST) -> Result<(), ForthError> {
-        self.push(st.to_word())
+        self.push(st.to_cell())
     }
 
     fn push_addr(&mut self, addr: Addr) -> Result<(),ForthError> {
@@ -2797,7 +2806,7 @@ CREATE REPL-PROMPT 2 ALLOT
     }
 
     fn push_var_addr(&mut self, addr: VarAddr) -> Result<(),ForthError> {
-        self.push(addr.to_word())
+        self.push(addr.to_cell())
     }
 
     fn drop(&mut self) -> Result<(), ForthError> {
@@ -2906,7 +2915,7 @@ CREATE REPL-PROMPT 2 ALLOT
             (quot0-1, rem0 + div)
         };
 
-        if quot > (Word::INT_MAX as i64) || quot < (Word::INT_MIN as i64) {
+        if quot > (Cell::INT_MAX as i64) || quot < (Cell::INT_MIN as i64) {
             return Err(ForthError::NumberOutOfRange);
         }
 
@@ -2921,7 +2930,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
         let quot : i64 = numer.wrapping_div(div);
 
-        if quot > (Word::INT_MAX as i64) || quot < (Word::INT_MIN as i64) {
+        if quot > (Cell::INT_MAX as i64) || quot < (Cell::INT_MIN as i64) {
             return Err(ForthError::NumberOutOfRange);
         }
 
@@ -2971,7 +2980,7 @@ CREATE REPL-PROMPT 2 ALLOT
         let dividend = self.pop_dbl_uint()?;
 
         let quot : u64 = dividend / (divisor as u64);
-        if quot > (Word::UINT_MAX as u64) {
+        if quot > (Cell::UINT_MAX as u64) {
             return Err(ForthError::NumberOutOfRange);
         }
 
@@ -3064,7 +3073,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
         match self.code[code_ind] {
             Instr::Defer(xt) => {
-                self.push(xt.to_word())?;
+                self.push(xt.to_cell())?;
             },
             _ => {
                 return Err(ForthError::NotDeferredFunction);
@@ -3088,10 +3097,10 @@ CREATE REPL-PROMPT 2 ALLOT
 
         if self.compiling() {
             let defer_at_xt = self.lookup_word("DEFER@")?;
-            self.add_instr(Instr::Push(deferred_xt.to_word()));
+            self.add_instr(Instr::Push(deferred_xt.to_cell()));
             self.add_instr(Instr::DoCol(defer_at_xt));
         } else {
-            self.push(deferred_xt.to_word())?;
+            self.push(deferred_xt.to_cell())?;
             self.builtin_defer_at()?;
         }
 
@@ -3112,10 +3121,10 @@ CREATE REPL-PROMPT 2 ALLOT
 
         if self.compiling() {
             let defer_bang_xt = self.lookup_word("DEFER!")?;
-            self.add_instr(Instr::Push(deferred_xt.to_word()));
+            self.add_instr(Instr::Push(deferred_xt.to_cell()));
             self.add_instr(Instr::DoCol(defer_bang_xt));
         } else {
-            self.push(deferred_xt.to_word())?;
+            self.push(deferred_xt.to_cell())?;
             self.builtin_defer_bang()?;
         }
 
@@ -3140,7 +3149,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
-    fn new_var(&mut self, initial_value: Word) -> Result<VarAddr, ForthError> {
+    fn new_var(&mut self, initial_value: Cell) -> Result<VarAddr, ForthError> {
         let addr = self.vars.len();
 
         if addr > (VarAddr::MAX as usize) {
@@ -3151,11 +3160,11 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(VarAddr(addr as u32))
     }
 
-    fn get_var_at(&self, addr: VarAddr) -> Result<Word, ForthError> {
+    fn get_var_at(&self, addr: VarAddr) -> Result<Cell, ForthError> {
         if (addr.0 & VarAddr::BUILTIN) != 0 {
             match addr {
-                ToyForth::ADDR_IN => { return Ok(Word::int(self.input_off as i32)) },
-                ToyForth::ADDR_OPTIMIZE => { return Ok(Word::int(self.optimize)) },
+                ToyForth::ADDR_IN => { return Ok(Cell::int(self.input_off as i32)) },
+                ToyForth::ADDR_OPTIMIZE => { return Ok(Cell::int(self.optimize)) },
                 _ => { return Err(ForthError::InvalidAddress(addr)) }
             }
         } else {
@@ -3168,7 +3177,7 @@ CREATE REPL-PROMPT 2 ALLOT
         }
     }
 
-    fn set_var_at(&mut self, addr: VarAddr, value: Word) -> Result<(), ForthError> {
+    fn set_var_at(&mut self, addr: VarAddr, value: Cell) -> Result<(), ForthError> {
         if (addr.0 & VarAddr::BUILTIN) != 0 {
             match addr {
                 ToyForth::ADDR_IN => { return Err(ForthError::ReadOnlyAddress(Addr::Var(addr))); },
@@ -3212,19 +3221,19 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
-    fn get_addr_value(&self, addr: Addr) -> Result<Word, ForthError> {
+    fn get_addr_value(&self, addr: Addr) -> Result<Cell, ForthError> {
         match addr {
             Addr::Var(a_addr) => {
                 self.get_var_at(a_addr)
             },
             Addr::Char(c_addr) => {
                 let ch = self.get_char_at(c_addr)?;
-                Ok(Word::int(ch as i32))
+                Ok(Cell::int(ch as i32))
             },
         }
     }
 
-    fn set_addr_value(&mut self, addr: Addr, value: Word) -> Result<(), ForthError> {
+    fn set_addr_value(&mut self, addr: Addr, value: Cell) -> Result<(), ForthError> {
         match addr {
             Addr::Var(a_addr) => {
                 self.set_var_at(a_addr, value)?;
@@ -3258,7 +3267,7 @@ CREATE REPL-PROMPT 2 ALLOT
             UnaryOp::Negate => { self.push_int(-a)?; Ok(()) },
             UnaryOp::Invert => {
                 let inverted = !(a as u32);
-                self.push(Word(inverted & Word::INT_MASK))?;
+                self.push(Cell(inverted & Cell::INT_MASK))?;
                 Ok(())
             },
         }
@@ -3270,16 +3279,16 @@ CREATE REPL-PROMPT 2 ALLOT
         let aw = self.pop().ok_or(ForthError::StackUnderflow)?;
 
         match op {
-            BinOp::Equal    => { self.push(Word::bool(aw.0 == bw.0))?; return Ok(()); },
-            BinOp::NotEqual => { self.push(Word::bool(aw.0 != bw.0))?; return Ok(()); },
+            BinOp::Equal    => { self.push(Cell::bool(aw.0 == bw.0))?; return Ok(()); },
+            BinOp::NotEqual => { self.push(Cell::bool(aw.0 != bw.0))?; return Ok(()); },
 
             BinOp::UnsignedGreater => {
                 let gt = match (aw.kind(), bw.kind()) {
-                    (WordKind::Int(a), WordKind::Int(b)) => {
-                        Word::bool( (a as u32) > (b as u32) )
+                    (CellKind::Int(a), CellKind::Int(b)) => {
+                        Cell::bool( (a as u32) > (b as u32) )
                     },
-                    (WordKind::VarAddr(VarAddr(a)), WordKind::VarAddr(VarAddr(b))) => {
-                        Word::bool( (a as u32) > (b as u32) )
+                    (CellKind::VarAddr(VarAddr(a)), CellKind::VarAddr(VarAddr(b))) => {
+                        Cell::bool( (a as u32) > (b as u32) )
                     },
                     _ => {
                         // XXX: need a better error!
@@ -3292,11 +3301,11 @@ CREATE REPL-PROMPT 2 ALLOT
             },
             BinOp::UnsignedLess => {
                 let lt = match (aw.kind(), bw.kind()) {
-                    (WordKind::Int(a), WordKind::Int(b)) => {
-                        Word::bool( (a as u32) < (b as u32) )
+                    (CellKind::Int(a), CellKind::Int(b)) => {
+                        Cell::bool( (a as u32) < (b as u32) )
                     },
-                    (WordKind::VarAddr(VarAddr(a)), WordKind::VarAddr(VarAddr(b))) => {
-                        Word::bool( (a as u32) < (b as u32) )
+                    (CellKind::VarAddr(VarAddr(a)), CellKind::VarAddr(VarAddr(b))) => {
+                        Cell::bool( (a as u32) < (b as u32) )
                     },
                     _ => {
                         // XXX: need a better error!
@@ -3316,58 +3325,58 @@ CREATE REPL-PROMPT 2 ALLOT
         let a = aw.to_int().ok_or(ForthError::ExpectedInteger(aw))?;
 
         // eprintln!("op = {:?}, a={}, b={}", op, a,b);
-        let result: Word = match op {
-            BinOp::Plus  => { Word::int(a+b) },
-            BinOp::Minus => { Word::int(a-b) },
-            BinOp::Star  => { Word::int(a.wrapping_mul(b)) },
+        let result: Cell = match op {
+            BinOp::Plus  => { Cell::int(a+b) },
+            BinOp::Minus => { Cell::int(a-b) },
+            BinOp::Star  => { Cell::int(a.wrapping_mul(b)) },
             BinOp::Slash => {
                 if b == 0 {
                     return Err(ForthError::DivisionByZero);
                 }
 
-                Word::int(a.wrapping_div(b))
+                Cell::int(a.wrapping_div(b))
             },
 
             BinOp::MStar => {
                 let m = (a as i64).wrapping_mul(b as i64);
                 let um = m as u64;
 
-                let cell_mask = Word::INT_MASK as u64;
+                let cell_mask = Cell::INT_MASK as u64;
 
                 let lo : u32 = (um & cell_mask) as u32;
-                let hi : u32 = (um >> Word::INT_BITS) as u32;
+                let hi : u32 = (um >> Cell::INT_BITS) as u32;
 
-                self.push(Word::int(lo as i32))?;
-                self.push(Word::int(hi as i32))?;
+                self.push(Cell::int(lo as i32))?;
+                self.push(Cell::int(hi as i32))?;
                 return Ok(());
             },
 
             BinOp::UMStar => {
-                let ua = (a as u32) & Word::INT_MASK;
-                let ub = (b as u32) & Word::INT_MASK;
+                let ua = (a as u32) & Cell::INT_MASK;
+                let ub = (b as u32) & Cell::INT_MASK;
                 let um = (ua as u64).wrapping_mul(ub as u64);
-                let cell_mask = Word::INT_MASK as u64;
+                let cell_mask = Cell::INT_MASK as u64;
 
                 let lo : u32 = (um & cell_mask) as u32;
-                let hi : u32 = (um >> Word::INT_BITS) as u32;
+                let hi : u32 = (um >> Cell::INT_BITS) as u32;
 
                 eprintln!("a = {}, b = {}, um = {}, lo = {}, hi = {}",
                       (ua as u64), (ub as u64), um, lo, hi);
-                self.push(Word::int(lo as i32))?;
-                self.push(Word::int(hi as i32))?;
+                self.push(Cell::int(lo as i32))?;
+                self.push(Cell::int(hi as i32))?;
                 return Ok(());
             },
 
-            BinOp::And      => { Word::int(((a as u32) & (b as u32)) as i32) },
-            BinOp::Or       => { Word::int(((a as u32) | (b as u32)) as i32) },
-            BinOp::Xor      => { Word::int(((a as u32) ^ (b as u32)) as i32) },
+            BinOp::And      => { Cell::int(((a as u32) & (b as u32)) as i32) },
+            BinOp::Or       => { Cell::int(((a as u32) | (b as u32)) as i32) },
+            BinOp::Xor      => { Cell::int(((a as u32) ^ (b as u32)) as i32) },
 
-            BinOp::Greater  => { Word::bool(a > b ) },
-            BinOp::Less     => { Word::bool(a < b ) },
+            BinOp::Greater  => { Cell::bool(a > b ) },
+            BinOp::Less     => { Cell::bool(a < b ) },
 
             BinOp::LeftShift  => {
                 // TODO: check b for range
-                Word( ((a as u32) << (b as u32)) & Word::INT_MASK )
+                Cell( ((a as u32) << (b as u32)) & Cell::INT_MASK )
             },
             BinOp::RightShift => {
                 // TODO: check b for range
@@ -3386,8 +3395,8 @@ CREATE REPL-PROMPT 2 ALLOT
                 //
                 // To avoid this, we apply the integer mask to zero out the u32 MSB.
                 //
-                let ua = (a as u32) & Word::INT_MASK;
-                Word( (ua >> ub) & Word::INT_MASK )
+                let ua = (a as u32) & Cell::INT_MASK;
+                Cell( (ua >> ub) & Cell::INT_MASK )
             },
 
             BinOp::Equal | BinOp::NotEqual | BinOp::UnsignedGreater | BinOp::UnsignedLess => {
@@ -3406,14 +3415,14 @@ CREATE REPL-PROMPT 2 ALLOT
 
         match self.lookup_dict_entry(s) {
             Ok(entry) => {
-                self.push(Word::from_xt(entry.start))?;
+                self.push(Cell::from_xt(entry.start))?;
                 let wh = if (entry.flags & DictEntry::IMMEDIATE) != 0 { 1 } else { -1 };
-                self.push(Word::int(wh))?;
+                self.push(Cell::int(wh))?;
                 Ok(())
             },
             Err(ForthError::StringNotFound) => {
-                self.push(st.to_word())?;
-                self.push(Word::int(0))?;
+                self.push(st.to_cell())?;
+                self.push(Cell::int(0))?;
                 Ok(())
             },
             Err(err) => {
@@ -3438,15 +3447,15 @@ CREATE REPL-PROMPT 2 ALLOT
 
         match self.lookup_dict_entry(s) {
             Ok(entry) => {
-                self.push(Word::from_xt(entry.start))?;
+                self.push(Cell::from_xt(entry.start))?;
                 let wh = if (entry.flags & DictEntry::IMMEDIATE) != 0 { 1 } else { -1 };
-                self.push(Word::int(wh))?;
+                self.push(Cell::int(wh))?;
                 Ok(())
             },
             Err(ForthError::StringNotFound) => {
-                self.push(st.to_word())?;
+                self.push(st.to_cell())?;
                 self.push_int(len)?;
-                self.push(Word::int(0))?;
+                self.push(Cell::int(0))?;
                 Ok(())
             },
             Err(err) => {
@@ -3520,16 +3529,16 @@ CREATE REPL-PROMPT 2 ALLOT
 
         // eprintln!("val = {}, st = {:?}, consumed = {}", val, st.offset(consumed as u8), consumed);
 
-        // TODO: check for word overflow!
+        // TODO: check for cell overflow!
         self.push_int(val as i32)?;
-        self.push(st.offset(consumed as u8).to_word())?;
+        self.push(st.offset(consumed as u8).to_cell())?;
         self.push_int(consumed as i32)?;
 
         Ok(())
     }
 
     fn lookup_bye(&self) -> Result<XT,ForthError> {
-        // BYE always at word 0.
+        // BYE always at XT(0).
         Ok(XT(0))
     }
 
@@ -3566,7 +3575,7 @@ CREATE REPL-PROMPT 2 ALLOT
         let s = self.maybe_string_at(st)?;
         let xt = self.lookup_word(s)?;
 
-        self.push(xt.to_word())?;
+        self.push(xt.to_cell())?;
         Ok(())
     }
 
@@ -3589,7 +3598,7 @@ CREATE REPL-PROMPT 2 ALLOT
         if ent.is_immediate() {
             self.add_instr(Instr::DoCol(ent.start));
         } else {
-            self.add_instr(Instr::Push(ent.start.to_word()));
+            self.add_instr(Instr::Push(ent.start.to_cell()));
             self.add_instr(Instr::DoCol(self.compile_comma_xt));
         }
 
@@ -3604,7 +3613,7 @@ CREATE REPL-PROMPT 2 ALLOT
         let s = self.maybe_string_at(st)?;
         let xt = self.lookup_word(s)?;
 
-        self.add_instr(Instr::Push(xt.to_word()));
+        self.add_instr(Instr::Push(xt.to_cell()));
         Ok(())
     }
 
@@ -3628,7 +3637,7 @@ CREATE REPL-PROMPT 2 ALLOT
     fn pop_char(&mut self) -> Result<u8, ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
-        if let WordKind::Int(v) = w.kind() {
+        if let CellKind::Int(v) = w.kind() {
             if v > 0 && v < 256 {
                 return Ok(v as u8);
             }
@@ -3670,7 +3679,7 @@ CREATE REPL-PROMPT 2 ALLOT
             return Err(ForthError::NumberOutOfRange);
         }
 
-        self.vars.resize(self.vars.len() + (n as usize), Word(0));
+        self.vars.resize(self.vars.len() + (n as usize), Cell(0));
         Ok(())
     }
 
@@ -3681,7 +3690,7 @@ CREATE REPL-PROMPT 2 ALLOT
             return Err(ForthError::VarSpaceOverflow);
         }
 
-        self.push(VarAddr(addr.0+1).to_word())?;
+        self.push(VarAddr(addr.0+1).to_cell())?;
         Ok(())
     }
 
@@ -3755,7 +3764,7 @@ CREATE REPL-PROMPT 2 ALLOT
         if let Some(out) = &self.out_stream {
             let mut wr = out.borrow_mut();
 
-            if let WordKind::Int(n) = w.kind() {
+            if let CellKind::Int(n) = w.kind() {
                 let mut buf = [0 as u8; 64];
                 wr.write(self.free_field_display(n as i64, &mut buf, 0, false)?)?;
                 // wr.write(&buf[..n])?;
@@ -3897,7 +3906,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        self.add_word(&s, &[ Instr::Push(addr.to_word()), Instr::Unnest ], 0)?;
+        self.add_word(&s, &[ Instr::Push(addr.to_cell()), Instr::Unnest ], 0)?;
 
         Ok(())
     }
@@ -3932,13 +3941,13 @@ CREATE REPL-PROMPT 2 ALLOT
 
         // add dummy push and call to runtime DOES>
         let xt = self.mark_code();
-        self.add_instr(Instr::Push(Word(0)));
+        self.add_instr(Instr::Push(Cell(0)));
         self.add_instr(Instr::Func(self.runtime_does_func));
         self.add_instr(Instr::Unnest);
 
         // now fix up push with XT after the call to runtime DOES>
         let after_xt = self.mark_code();
-        self.code[xt.0 as usize] = Instr::Push(after_xt.to_word());
+        self.code[xt.0 as usize] = Instr::Push(after_xt.to_cell());
 
         Ok(())
     }
@@ -3953,7 +3962,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
         if let Instr::Push(w) = self.code[addr] {
             let addr = w.to_addr().ok_or(ForthError::InvalidCell(xt))?;
-            self.push(addr.to_word())?;
+            self.push(addr.to_cell())?;
             return Ok(());
         } else {
             return Err(ForthError::InvalidCell(xt));
@@ -3966,9 +3975,9 @@ CREATE REPL-PROMPT 2 ALLOT
     }
 
     fn builtin_clear_compile_state(&mut self) -> Result<(), ForthError> {
-        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0))?;
-        self.set_var_at(ToyForth::ADDR_SLASH_CXT, Word(0))?;
-        self.set_var_at(ToyForth::ADDR_STATE, Word::int(0))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Cell(0))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT, Cell(0))?;
+        self.set_var_at(ToyForth::ADDR_STATE, Cell::int(0))?;
         Ok(())
     }
 
@@ -4026,11 +4035,11 @@ CREATE REPL-PROMPT 2 ALLOT
             return Err(ForthError::InvalidEmptyString);
         }
 
-        let addr = self.new_var(Word(0))?;
+        let addr = self.new_var(Cell(0))?;
 
         // FIXME: completely unnecessary copy here...
         let s = self.maybe_string_at(st)?.to_string();
-        self.add_word(&s, &[ Instr::Push(addr.to_word()), Instr::Unnest ], 0)?;
+        self.add_word(&s, &[ Instr::Push(addr.to_cell()), Instr::Unnest ], 0)?;
 
         Ok(())
     }
@@ -4053,11 +4062,11 @@ CREATE REPL-PROMPT 2 ALLOT
         let st = self.add_string(&s)?;
 
         // XXX: check that STATE==0, /CDEF and /CXT are not set
-        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, st.to_word())?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, st.to_cell())?;
 
         let xt = self.mark_code();
-        self.set_var_at(ToyForth::ADDR_SLASH_CXT, xt.to_word())?;
-        self.set_var_at(ToyForth::ADDR_STATE, Word::int(1))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT, xt.to_cell())?;
+        self.set_var_at(ToyForth::ADDR_STATE, Cell::int(1))?;
 
         Ok(())
     }
@@ -4068,11 +4077,11 @@ CREATE REPL-PROMPT 2 ALLOT
         // TODO: check not defining
 
         // XXX: check that STATE==0, /CDEF and /CXT are not set
-        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Cell(0))?;
 
         let xt = self.mark_code();
-        self.set_var_at(ToyForth::ADDR_SLASH_CXT, xt.to_word())?;
-        self.set_var_at(ToyForth::ADDR_STATE, Word::int(1))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT, xt.to_cell())?;
+        self.set_var_at(ToyForth::ADDR_STATE, Cell::int(1))?;
 
         Ok(())
     }
@@ -4086,7 +4095,7 @@ CREATE REPL-PROMPT 2 ALLOT
         let cxt  = self.get_var_at(ToyForth::ADDR_SLASH_CXT)?;
         let xt = cxt.to_xt().ok_or(ForthError::ExpectedXT(cxt))?; // XXX: need better error
 
-        if cdef != Word(0) {
+        if cdef != Cell(0) {
             let st = cdef.to_str().ok_or(ForthError::ExpectedString(cdef))?; // XXX: need better error
             let end = self.mark_code();
 
@@ -4106,12 +4115,12 @@ CREATE REPL-PROMPT 2 ALLOT
                 end: end,
                 flags: 0,
             });
-            self.push(xt.to_word())?;
+            self.push(xt.to_cell())?;
         }
 
-        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Word(0))?;
-        self.set_var_at(ToyForth::ADDR_SLASH_CXT, Word(0))?;
-        self.set_var_at(ToyForth::ADDR_STATE, Word::int(0))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Cell(0))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_CXT, Cell(0))?;
+        self.set_var_at(ToyForth::ADDR_STATE, Cell::int(0))?;
 
         Ok(())
     }
@@ -4140,15 +4149,15 @@ CREATE REPL-PROMPT 2 ALLOT
 
     fn builtin_obracket(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
-        self.set_var_at(ToyForth::ADDR_SLASH_BRACKET, Word::int(1))?;
-        self.set_var_at(ToyForth::ADDR_STATE, Word::int(0))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_BRACKET, Cell::int(1))?;
+        self.set_var_at(ToyForth::ADDR_STATE, Cell::int(0))?;
         Ok(())
     }
 
     fn builtin_cbracket(&mut self) -> Result<(), ForthError> {
         self.check_interpreting()?;
-        self.set_var_at(ToyForth::ADDR_SLASH_BRACKET, Word::int(0))?;
-        self.set_var_at(ToyForth::ADDR_STATE, Word::int(1))?;
+        self.set_var_at(ToyForth::ADDR_SLASH_BRACKET, Cell::int(0))?;
+        self.set_var_at(ToyForth::ADDR_STATE, Cell::int(1))?;
         Ok(())
     }
 
@@ -4542,7 +4551,7 @@ CREATE REPL-PROMPT 2 ALLOT
         }
 
         let ch = b[0];
-        let w = Word::int(ch as i32);
+        let w = Cell::int(ch as i32);
         self.add_instr(Instr::Push(w));
         Ok(())
     }
@@ -4580,7 +4589,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
     fn builtin_char_plus(&mut self) -> Result<(), ForthError> {
         let st = self.pop_str()?;
-        self.push(st.offset(1).to_word())?;
+        self.push(st.offset(1).to_cell())?;
         Ok(())
     }
 
@@ -4603,8 +4612,7 @@ CREATE REPL-PROMPT 2 ALLOT
         wstr[0] = len as u8;
         wstr[1..(len+1)].copy_from_slice(&tmp);
 
-        // self.push(ST::input_space(off as u8,len as u8).to_word())?;
-        self.push(ST::word_space(0, (len+1) as u8).to_word())?;
+        self.push(ST::word_space(0, (len+1) as u8).to_cell())?;
         Ok(())
     }
 
@@ -4614,7 +4622,7 @@ CREATE REPL-PROMPT 2 ALLOT
         let st = self.next_word(delim, u8::MAX as usize)?;
         let len = st.len();
 
-        self.push(st.to_word())?;
+        self.push(st.to_cell())?;
         self.push_int(len as i32)?;
         Ok(())
     }
@@ -4660,8 +4668,8 @@ CREATE REPL-PROMPT 2 ALLOT
 
         let (st,len) = self.add_string_to_quote(false)?;
 
-        self.add_instr(Instr::Push(st.to_word()));
-        self.add_instr(Instr::Push(Word::int(len as i32)));
+        self.add_instr(Instr::Push(st.to_cell()));
+        self.add_instr(Instr::Push(Cell::int(len as i32)));
         Ok(())
     }
 
@@ -4670,7 +4678,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
         let (st,_) = self.add_string_to_quote(true)?;
 
-        self.add_instr(Instr::Push(st.to_word()));
+        self.add_instr(Instr::Push(st.to_cell()));
         Ok(())
     }
 
@@ -4827,7 +4835,7 @@ CREATE REPL-PROMPT 2 ALLOT
             ST::allocated_space(0,0)
         };
 
-        self.push(st.to_word())?;
+        self.push(st.to_cell())?;
         self.push_int(len as i32)?;
         Ok(())
     }
@@ -4904,7 +4912,7 @@ CREATE REPL-PROMPT 2 ALLOT
     }
 
     pub fn builtin_here(&mut self) -> Result<(),ForthError> {
-        self.push(self.here().to_word())?;
+        self.push(self.here().to_cell())?;
         Ok(())
     }
 
@@ -4922,7 +4930,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
     pub fn builtin_unused(&mut self) -> Result<(),ForthError> {
         let here = self.vars.len();
-        let unused = Word::INT_MAX - (here as i32);
+        let unused = Cell::INT_MAX - (here as i32);
 
         // TODO: check for overflow!
         self.push_int(unused)?;
@@ -4930,12 +4938,12 @@ CREATE REPL-PROMPT 2 ALLOT
     }
 
     // nb: pop is only called from rust, so it's not a forth primitive
-    pub fn pop(&mut self) -> Option<Word> {
+    pub fn pop(&mut self) -> Option<Cell> {
         self.dstack.pop()
     }
 
     // nb: pop is only called from rust, so it's not a forth primitive
-    pub fn peek(&self) -> Option<Word> {
+    pub fn peek(&self) -> Option<Cell> {
         self.dstack.last().map(|x| *x)
     }
 
@@ -4943,7 +4951,7 @@ CREATE REPL-PROMPT 2 ALLOT
     pub fn peek_str(&self) -> Result<ST, ForthError> {
         let w = self.peek().ok_or(ForthError::StackUnderflow)?;
 
-        if let WordKind::Str(st) = w.kind() {
+        if let CellKind::Str(st) = w.kind() {
             Ok(st)
         } else {
             Err(ForthError::ExpectedString(w))
@@ -4952,7 +4960,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
     fn pop_int(&mut self) -> Result<i32, ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::Int(x) = w.kind() {
+        if let CellKind::Int(x) = w.kind() {
             Ok(x)
         } else {
             Err(ForthError::ExpectedInteger(w))
@@ -4961,12 +4969,12 @@ CREATE REPL-PROMPT 2 ALLOT
 
     fn pop_uint(&mut self) -> Result<u32, ForthError> {
         let v = self.pop_int()?;
-        Ok((v as u32) & Word::INT_MASK)
+        Ok((v as u32) & Cell::INT_MASK)
     }
 
     fn pop_str(&mut self) -> Result<ST,ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::Str(st) = w.kind() {
+        if let CellKind::Str(st) = w.kind() {
             Ok(st)
         } else {
             Err(ForthError::ExpectedString(w))
@@ -4975,7 +4983,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
     fn pop_xt(&mut self) -> Result<XT,ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::XT(xt) = w.kind() {
+        if let CellKind::XT(xt) = w.kind() {
             Ok(xt)
         } else {
             Err(ForthError::ExpectedXT(w))
@@ -4985,10 +4993,10 @@ CREATE REPL-PROMPT 2 ALLOT
     fn pop_addr(&mut self) -> Result<Addr,ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
         match w.kind() {
-            WordKind::VarAddr(a_addr) => {
+            CellKind::VarAddr(a_addr) => {
                 Ok(Addr::Var(a_addr))
             },
-            WordKind::Str(c_addr) => {
+            CellKind::Str(c_addr) => {
                 Ok(Addr::Char(c_addr))
             },
             _ => Err(ForthError::ExpectedAddr(w)),
@@ -4997,15 +5005,15 @@ CREATE REPL-PROMPT 2 ALLOT
 
     fn pop_var_addr(&mut self) -> Result<VarAddr,ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
-        if let WordKind::VarAddr(addr) = w.kind() {
+        if let CellKind::VarAddr(addr) = w.kind() {
             Ok(addr)
         } else {
             Err(ForthError::ExpectedVarAddr(w))
         }
     }
 
-    fn pop_kind(&mut self) -> Option<WordKind> {
-        self.dstack.pop().map(Word::kind)
+    fn pop_kind(&mut self) -> Option<CellKind> {
+        self.dstack.pop().map(Cell::kind)
     }
 
     pub fn exec_at(&mut self, xt: XT) -> Result<ForthResult, ForthError> {
@@ -5111,7 +5119,7 @@ CREATE REPL-PROMPT 2 ALLOT
 
                         let i0 = dlen-(count as usize);
                         for itm in self.dstack.drain(i0..) {
-                            if let WordKind::Int(index) = itm.kind() {
+                            if let CellKind::Int(index) = itm.kind() {
                                 self.cstack.push(ControlEntry::Index(index));
                             } else {
                                 return Err(ForthError::InvalidIndex(itm));
@@ -5170,7 +5178,7 @@ CREATE REPL-PROMPT 2 ALLOT
                     };
 
                     self.cstack[clen-1] = ControlEntry::Index(next);
-                    self.push(Word::bool(next == top))?;
+                    self.push(Cell::bool(next == top))?;
 
                     self.pc += 1;
                 },
@@ -5252,41 +5260,41 @@ mod tests {
 
     #[test]
     fn words() {
-        assert_eq!(Word::int(123).to_int().unwrap(), 123);
-        assert_eq!(Word::int(-123).to_int().unwrap(), -123);
+        assert_eq!(Cell::int(123).to_int().unwrap(), 123);
+        assert_eq!(Cell::int(-123).to_int().unwrap(), -123);
 
-        assert_eq!(Word::xt(123).to_xt().unwrap(), XT(123));
+        assert_eq!(Cell::xt(123).to_xt().unwrap(), XT(123));
 
-        assert_eq!(Word::str(((123 as u32)<<8) | 10).to_str().unwrap(), ST::allocated_space(123, 10));
+        assert_eq!(Cell::str(((123 as u32)<<8) | 10).to_str().unwrap(), ST::allocated_space(123, 10));
 
-        assert_eq!(Word::xt(123).to_int(), None);
-        assert_eq!(Word::xt(123).to_str(), None);
-        assert_eq!(Word::xt(123).to_addr(), None);
+        assert_eq!(Cell::xt(123).to_int(), None);
+        assert_eq!(Cell::xt(123).to_str(), None);
+        assert_eq!(Cell::xt(123).to_addr(), None);
 
-        assert_eq!(Word::str(123).to_int(), None);
-        assert_eq!(Word::str(123).to_xt(), None);
-        assert_eq!(Word::str(123).to_addr(), None);
+        assert_eq!(Cell::str(123).to_int(), None);
+        assert_eq!(Cell::str(123).to_xt(), None);
+        assert_eq!(Cell::str(123).to_addr(), None);
 
-        assert_eq!(Word::int(123).to_xt(), None);
-        assert_eq!(Word::int(123).to_str(), None);
-        assert_eq!(Word::int(123).to_addr(), None);
+        assert_eq!(Cell::int(123).to_xt(), None);
+        assert_eq!(Cell::int(123).to_str(), None);
+        assert_eq!(Cell::int(123).to_addr(), None);
 
-        assert_eq!(Word::int(-123).to_xt(), None);
-        assert_eq!(Word::int(-123).to_str(), None);
-        assert_eq!(Word::int(-123).to_addr(), None);
+        assert_eq!(Cell::int(-123).to_xt(), None);
+        assert_eq!(Cell::int(-123).to_str(), None);
+        assert_eq!(Cell::int(-123).to_addr(), None);
 
-        assert_eq!(Word::addr(123), Word(Word::HIGH_BIT | Word::SIGN_BIT | VarAddr::ADDR_BIT | 123));
-        assert_eq!(Word::addr(123), VarAddr(123).to_word());
-        assert_eq!(Word::addr(123).to_addr().unwrap(), VarAddr(123));
-        assert_eq!(Word::addr(123).to_xt(), None);
-        assert_eq!(Word::addr(123).to_str(), None);
+        assert_eq!(Cell::addr(123), Cell(Cell::HIGH_BIT | Cell::SIGN_BIT | VarAddr::ADDR_BIT | 123));
+        assert_eq!(Cell::addr(123), VarAddr(123).to_cell());
+        assert_eq!(Cell::addr(123).to_addr().unwrap(), VarAddr(123));
+        assert_eq!(Cell::addr(123).to_xt(), None);
+        assert_eq!(Cell::addr(123).to_str(), None);
     }
 
     #[test]
     #[ignore]
     fn all_xt_values() {
         for x in 0 .. (XT::MAX+1) {
-            let w = Word::xt(x);
+            let w = Cell::xt(x);
             assert_eq!(w.to_xt().unwrap(), XT(x), "word {:?} does not convert to XT({}) ", w, x);
             assert_eq!(w.to_int(),  None, "XT({}) incorrectly shares a representation with int", x);
             assert_eq!(w.to_str(),  None, "XT({}) incorrectly shares a representation with ST", x);
@@ -5298,7 +5306,7 @@ mod tests {
     #[ignore]
     fn all_addr_values() {
         for x in 0 .. (VarAddr::MAX+1) {
-            let w = Word::addr(x);
+            let w = Cell::addr(x);
             assert_eq!(w.to_addr().unwrap(), VarAddr(x), "word {:?} does not convert to VarAddr({}) ", w, x);
             assert_eq!(w.to_int(), None, "VarAddr({}) incorrectly shares a representation with int", x);
             assert_eq!(w.to_str(), None, "VarAddr({}) incorrectly shares a representation with ST", x);
@@ -5309,8 +5317,8 @@ mod tests {
     #[test]
     #[ignore]
     fn all_int_values() {
-        for x in Word::INT_MIN .. (Word::INT_MAX+1) {
-            let w = Word::int(x);
+        for x in Cell::INT_MIN .. (Cell::INT_MAX+1) {
+            let w = Cell::int(x);
             assert_eq!(w.to_int().unwrap(), x, "word {:?} does not convert to integer {} ", w, x);
             assert_eq!(w.to_xt(),  None, "int({}) incorrectly shares a representation with XT", x);
             assert_eq!(w.to_str(), None, "int({}) incorrectly shares a representation with ST", x);
@@ -5321,21 +5329,21 @@ mod tests {
     #[test]
     fn stack_prims() {
         let mut forth = ToyForth::new();
-        forth.push(Word::int( 123)).unwrap();
-        forth.push(Word::int(-123)).unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::int(-123));
-        assert_eq!(forth.pop().unwrap(), Word::int( 123));
+        forth.push(Cell::int( 123)).unwrap();
+        forth.push(Cell::int(-123)).unwrap();
+        assert_eq!(forth.pop().unwrap(), Cell::int(-123));
+        assert_eq!(forth.pop().unwrap(), Cell::int( 123));
 
-        forth.push(Word::int( 123)).unwrap();
-        forth.push(Word::int(-123)).unwrap();
+        forth.push(Cell::int( 123)).unwrap();
+        forth.push(Cell::int(-123)).unwrap();
         forth.swap().unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::int( 123));
-        assert_eq!(forth.pop().unwrap(), Word::int(-123));
+        assert_eq!(forth.pop().unwrap(), Cell::int( 123));
+        assert_eq!(forth.pop().unwrap(), Cell::int(-123));
 
-        forth.push(Word::int( 123)).unwrap();
+        forth.push(Cell::int( 123)).unwrap();
         forth.dup().unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::int(123));
-        assert_eq!(forth.pop().unwrap(), Word::int(123));
+        assert_eq!(forth.pop().unwrap(), Cell::int(123));
+        assert_eq!(forth.pop().unwrap(), Cell::int(123));
     }
 
     #[test]
@@ -5360,8 +5368,8 @@ mod tests {
         assert_eq!(ST::allocated_space(base+0, 7), st1);
         assert_eq!(ST::allocated_space(base+8, 7), st2);
 
-        assert_eq!(st1.to_word().kind(), WordKind::Str(st1));
-        assert_eq!(st2.to_word().kind(), WordKind::Str(st2));
+        assert_eq!(st1.to_cell().kind(), CellKind::Str(st1));
+        assert_eq!(st2.to_cell().kind(), CellKind::Str(st2));
     }
 
     #[test]
@@ -5369,9 +5377,9 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let code = vec![
-            Instr::Push(Word::int(4314)),
-            Instr::Push(Word::int(-132)),
-            Instr::Push(Word::int(-999)),
+            Instr::Push(Cell::int(4314)),
+            Instr::Push(Cell::int(-132)),
+            Instr::Push(Cell::int(-999)),
             Instr::Swap,
             Instr::Drop,
             Instr::Bye,
@@ -5380,8 +5388,8 @@ mod tests {
         let xt = forth.add_code(&code);
 
         forth.exec_at(xt).unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::int(-999));
-        assert_eq!(forth.pop().unwrap(), Word::int(4314));
+        assert_eq!(forth.pop().unwrap(), Cell::int(-999));
+        assert_eq!(forth.pop().unwrap(), Cell::int(4314));
         assert_eq!(forth.pop(), None);
     }
 
@@ -5390,10 +5398,10 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let code = vec![
-            Instr::Push(Word::int(4314)),
-            Instr::Push(Word::int(-132)),
+            Instr::Push(Cell::int(4314)),
+            Instr::Push(Cell::int(-132)),
             Instr::BinaryOp(BinOp::Plus),
-            Instr::Push(Word::int(-10)),
+            Instr::Push(Cell::int(-10)),
             Instr::BinaryOp(BinOp::Star),
             Instr::Bye,
         ];
@@ -5401,7 +5409,7 @@ mod tests {
         let xt = forth.add_code(&code);
         assert_eq!(forth.exec_at(xt).unwrap(), ForthResult::Bye);
 
-        assert_eq!(forth.pop().unwrap(), Word::int(-41820));
+        assert_eq!(forth.pop().unwrap(), Cell::int(-41820));
         assert_eq!(forth.pop(), None);
     }
 
@@ -5414,20 +5422,20 @@ mod tests {
         assert_eq!(entries.len(), 5);
 
         /* f(x) = 2*x + 1 */
-        entries[0] = Instr::Push(Word::int(2));
+        entries[0] = Instr::Push(Cell::int(2));
         entries[1] = Instr::BinaryOp(BinOp::Star);
-        entries[2] = Instr::Push(Word::int(1));
+        entries[2] = Instr::Push(Cell::int(1));
         entries[3] = Instr::BinaryOp(BinOp::Plus);
         entries[4] = Instr::Unnest;
 
         let xt1 = forth.add_code(&vec![
-            Instr::Push(Word::int(2)),
+            Instr::Push(Cell::int(2)),
             Instr::DoCol(xt0),
             Instr::Bye,
         ]);
 
         forth.exec_at(xt1).unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::int(5));
+        assert_eq!(forth.pop().unwrap(), Cell::int(5));
         assert_eq!(forth.pop(), None);
     }
 
@@ -5439,9 +5447,9 @@ mod tests {
         assert_eq!(entries.len(), 5);
 
         /* f(x) = 2*x + 1 */
-        entries[0] = Instr::Push(Word::int(2));
+        entries[0] = Instr::Push(Cell::int(2));
         entries[1] = Instr::BinaryOp(BinOp::Star);
-        entries[2] = Instr::Push(Word::int(1));
+        entries[2] = Instr::Push(Cell::int(1));
         entries[3] = Instr::BinaryOp(BinOp::Plus);
         entries[4] = Instr::Unnest;
 
@@ -5461,25 +5469,25 @@ mod tests {
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 5);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "x");
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,2)));
+        assert_eq!(forth.pop().unwrap(), Cell::from_str(ST::word_space(0,2)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 10);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "test");
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,5)));
+        assert_eq!(forth.pop().unwrap(), Cell::from_str(ST::word_space(0,5)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 14);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "foo");
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,4)));
+        assert_eq!(forth.pop().unwrap(), Cell::from_str(ST::word_space(0,4)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
         assert_eq!(forth.input_off, 20);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "bar");
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::word_space(0,4)));
+        assert_eq!(forth.pop().unwrap(), Cell::from_str(ST::word_space(0,4)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_word().unwrap();
@@ -5487,7 +5495,7 @@ mod tests {
         let pk = forth.peek().unwrap();
         eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "");
-        assert_eq!(forth.pop().unwrap(), ST::word_space(0,1).to_word());
+        assert_eq!(forth.pop().unwrap(), ST::word_space(0,1).to_cell());
 
         // make sure we can search again and it's well behaved...
         forth.push_int(' ' as i32).unwrap();
@@ -5496,7 +5504,7 @@ mod tests {
         let pk = forth.peek().unwrap();
         eprintln!("last word is {:?} - {} - {:b}", pk, pk, pk.0);
         assert_eq!(forth.counted_string_at(forth.peek_str().unwrap()), "");
-        assert_eq!(forth.pop().unwrap(), ST::word_space(0,1).to_word());
+        assert_eq!(forth.pop().unwrap(), ST::word_space(0,1).to_cell());
     }
 
     #[test]
@@ -5535,38 +5543,38 @@ mod tests {
         forth.builtin_parse().unwrap();
         assert_eq!(forth.input_off, 5);
         assert_eq!(forth.pop_int().unwrap(), 1);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(2,1)));
+        assert_eq!(forth.pop().unwrap(), Cell::from_str(ST::input_space(2,1)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
         assert_eq!(forth.input_off, 10);
         assert_eq!(forth.pop_int().unwrap(), 4);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(5,4)));
+        assert_eq!(forth.pop().unwrap(), Cell::from_str(ST::input_space(5,4)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
         assert_eq!(forth.input_off, 14);
         assert_eq!(forth.pop_int().unwrap(), 3);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(10,3)));
+        assert_eq!(forth.pop().unwrap(), Cell::from_str(ST::input_space(10,3)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
         assert_eq!(forth.input_off, 20);
         assert_eq!(forth.pop_int().unwrap(), 3);
-        assert_eq!(forth.pop().unwrap(), Word::from_str(ST::input_space(14,3)));
+        assert_eq!(forth.pop().unwrap(), Cell::from_str(ST::input_space(14,3)));
 
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
         assert_eq!(forth.input_off, 20);
         assert_eq!(forth.pop_int().unwrap(), 0);
-        assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_word());
+        assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_cell());
 
         // make sure we can search again and it's well behaved...
         forth.push_int(' ' as i32).unwrap();
         forth.builtin_parse().unwrap();
         assert_eq!(forth.input_off, 20);
         assert_eq!(forth.pop_int().unwrap(), 0);
-        assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_word());
+        assert_eq!(forth.pop().unwrap(), ST::input_space(20,0).to_cell());
     }
 
     #[test]
@@ -5607,9 +5615,9 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let xt = forth.add_word("my_func", &vec![
-           Instr::Push(Word::int(2)),
+           Instr::Push(Cell::int(2)),
            Instr::BinaryOp(BinOp::Star),
-           Instr::Push(Word::int(1)),
+           Instr::Push(Cell::int(1)),
            Instr::BinaryOp(BinOp::Plus),
            Instr::Unnest,
         ], 0).unwrap();
@@ -5624,7 +5632,7 @@ mod tests {
             forth.builtin_find().unwrap();
 
             assert_eq!(forth.pop_int().unwrap(), 0);
-            assert_eq!(forth.pop_kind().unwrap(), WordKind::Str(st));
+            assert_eq!(forth.pop_kind().unwrap(), CellKind::Str(st));
         }
 
         forth.set_input("my_func");
@@ -5634,7 +5642,7 @@ mod tests {
             forth.builtin_find().unwrap();
 
             assert_eq!(forth.pop_int().unwrap(), -1);
-            assert_eq!(forth.pop_kind().unwrap(), WordKind::XT(xt));
+            assert_eq!(forth.pop_kind().unwrap(), CellKind::XT(xt));
         }
     }
 
@@ -5655,9 +5663,9 @@ mod tests {
         let mut forth = ToyForth::new();
 
         let xt = forth.add_word("my_func", &vec![
-           Instr::Push(Word::int(2)),
+           Instr::Push(Cell::int(2)),
            Instr::BinaryOp(BinOp::Star),
-           Instr::Push(Word::int(1)),
+           Instr::Push(Cell::int(1)),
            Instr::BinaryOp(BinOp::Plus),
            Instr::Unnest,
         ], 0).unwrap();
@@ -5671,7 +5679,7 @@ mod tests {
             let len = forth.pop_int().unwrap();
             let st  = forth.pop_str().unwrap();
 
-            forth.push(st.to_word()).unwrap();
+            forth.push(st.to_cell()).unwrap();
             forth.push_int(len).unwrap();
 
             assert_eq!(len, 4);
@@ -5697,7 +5705,7 @@ mod tests {
             forth.builtin_find_name().unwrap();
 
             assert_eq!(forth.pop_int().unwrap(), -1);
-            assert_eq!(forth.pop_kind().unwrap(), WordKind::XT(xt));
+            assert_eq!(forth.pop_kind().unwrap(), CellKind::XT(xt));
         }
     }
 
@@ -5706,9 +5714,9 @@ mod tests {
         let mut forth = ToyForth::new();
 
         forth.add_word("my_func", &vec![
-           Instr::Push(Word::int(2)),
+           Instr::Push(Cell::int(2)),
            Instr::BinaryOp(BinOp::Star),
-           Instr::Push(Word::int(1)),
+           Instr::Push(Cell::int(1)),
            Instr::BinaryOp(BinOp::Plus),
            Instr::Unnest,
         ], 0).unwrap();
@@ -5743,8 +5751,8 @@ mod tests {
     fn can_interpret_two_words() {
         let mut forth = ToyForth::new();
 
-        forth.add_primitive("ONE", Instr::Push(Word::int(1))).unwrap();
-        forth.add_primitive("TWO", Instr::Push(Word::int(2))).unwrap();
+        forth.add_primitive("ONE", Instr::Push(Cell::int(1))).unwrap();
+        forth.add_primitive("TWO", Instr::Push(Cell::int(2))).unwrap();
 
         forth.interpret("ONE DUP").unwrap();
         assert_eq!(forth.stack_depth(), 2);
@@ -5758,7 +5766,7 @@ mod tests {
 
         forth.push_int(0).unwrap();
         let st = forth.add_string("123").unwrap();
-        forth.push(Word::from_str(st)).unwrap();
+        forth.push(Cell::from_str(st)).unwrap();
         forth.push_int(3).unwrap();
         forth.builtin_to_number().unwrap();
 
@@ -5769,7 +5777,7 @@ mod tests {
 
         forth.push_int(0).unwrap();
         let st = forth.add_string("54a3").unwrap();
-        forth.push(Word::from_str(st)).unwrap();
+        forth.push(Cell::from_str(st)).unwrap();
         forth.push_int(4).unwrap();
         forth.builtin_to_number().unwrap();
 
@@ -5817,8 +5825,8 @@ mod tests {
         assert_eq!(forth.aux_stack_depth(), 1);
         assert_eq!(forth.rstack_depth(), 0);
 
-        assert_eq!(forth.dstack.last().map(|x| *x).unwrap(), Word::int(1));
-        assert_eq!(forth.aux_stack.last().map(|x| *x).unwrap(), Word::int(2));
+        assert_eq!(forth.dstack.last().map(|x| *x).unwrap(), Cell::int(1));
+        assert_eq!(forth.aux_stack.last().map(|x| *x).unwrap(), Cell::int(2));
 
         forth.push_int(3).unwrap();
         forth.aux_to_data().unwrap();
@@ -5859,11 +5867,11 @@ mod tests {
     fn can_allocate_and_use_vars() {
         let mut forth = ToyForth::new();
 
-        let addr = forth.new_var(Word::int(0)).unwrap();
-        assert_eq!(forth.get_var_at(addr).unwrap(), Word::int(0));
+        let addr = forth.new_var(Cell::int(0)).unwrap();
+        assert_eq!(forth.get_var_at(addr).unwrap(), Cell::int(0));
 
-        forth.set_var_at(addr, Word::int(123)).unwrap();
-        assert_eq!(forth.get_var_at(addr).unwrap(), Word::int(123));
+        forth.set_var_at(addr, Cell::int(123)).unwrap();
+        assert_eq!(forth.get_var_at(addr).unwrap(), Cell::int(123));
     }
 
     #[test]
@@ -5908,42 +5916,42 @@ mod tests {
 
         // 5,3
         forth.interpret("5 3 >").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::true_value());
+        assert_eq!(forth.pop().unwrap(), Cell::true_value());
 
         forth.interpret("5 3 <").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::false_value());
+        assert_eq!(forth.pop().unwrap(), Cell::false_value());
 
         forth.interpret("5 3 =").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::false_value());
+        assert_eq!(forth.pop().unwrap(), Cell::false_value());
 
         forth.interpret("5 3 <>").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::true_value());
+        assert_eq!(forth.pop().unwrap(), Cell::true_value());
 
         // 3,5
         forth.interpret("3 5 >").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::false_value());
+        assert_eq!(forth.pop().unwrap(), Cell::false_value());
 
         forth.interpret("3 5 <").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::true_value());
+        assert_eq!(forth.pop().unwrap(), Cell::true_value());
 
         forth.interpret("3 5 =").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::false_value());
+        assert_eq!(forth.pop().unwrap(), Cell::false_value());
 
         forth.interpret("3 5 <>").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::true_value());
+        assert_eq!(forth.pop().unwrap(), Cell::true_value());
 
         // 3,3
         forth.interpret("3 3 =").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::true_value());
+        assert_eq!(forth.pop().unwrap(), Cell::true_value());
 
         forth.interpret("3 3 >").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::false_value());
+        assert_eq!(forth.pop().unwrap(), Cell::false_value());
 
         forth.interpret("3 3 <").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::false_value());
+        assert_eq!(forth.pop().unwrap(), Cell::false_value());
 
         forth.interpret("3 3 <>").unwrap();
-        assert_eq!(forth.pop().unwrap(), Word::false_value());
+        assert_eq!(forth.pop().unwrap(), Cell::false_value());
     }
 
     #[test]
@@ -6924,8 +6932,8 @@ MSB 2/ MSB AND \\ 0
         fn check_eq(forth: &ToyForth, vals: &[isize]) {
             assert_eq!(forth.dstack,
                        vals.iter().map(
-                           |x| Word::int(*x as i32)
-                        ).collect::<Vec<Word>>());
+                           |x| Cell::int(*x as i32)
+                        ).collect::<Vec<Cell>>());
         }
 
         forth.interpret("0 1 2 3 4 5 6 7").unwrap();  // load stack
@@ -7091,19 +7099,19 @@ ACTION-OF defer3
 
         forth.interpret("' parse ' parse =").unwrap();
         assert_eq!(forth.stack_depth(), 1);
-        assert_eq!(forth.pop().unwrap(), Word::true_value());
+        assert_eq!(forth.pop().unwrap(), Cell::true_value());
 
         forth.interpret("' parse ' word =").unwrap();
         assert_eq!(forth.stack_depth(), 1);
-        assert_eq!(forth.pop().unwrap(), Word::false_value());
+        assert_eq!(forth.pop().unwrap(), Cell::false_value());
 
         forth.interpret("' parse ' parse <>").unwrap();
         assert_eq!(forth.stack_depth(), 1);
-        assert_eq!(forth.pop().unwrap(), Word::false_value());
+        assert_eq!(forth.pop().unwrap(), Cell::false_value());
 
         forth.interpret("' parse ' * <>").unwrap();
         assert_eq!(forth.stack_depth(), 1);
-        assert_eq!(forth.pop().unwrap(), Word::true_value());
+        assert_eq!(forth.pop().unwrap(), Cell::true_value());
     }
 
     #[test]
@@ -7173,11 +7181,11 @@ CONSTANT 1ST
 ").unwrap();
 
         assert_eq!(forth.stack_depth(), 1);
-        assert_eq!(forth.pop().unwrap(), Word::bool(true));
+        assert_eq!(forth.pop().unwrap(), Cell::bool(true));
 
         forth.interpret("1ST CELL+ 2ND =").unwrap();
         assert_eq!(forth.stack_depth(), 1);
-        assert_eq!(forth.pop().unwrap(), Word::bool(true));
+        assert_eq!(forth.pop().unwrap(), Cell::bool(true));
 
         forth.interpret("16 , 2ND @").unwrap();
         assert_eq!(forth.stack_depth(), 1);
@@ -7454,7 +7462,7 @@ st1 @ @
             let mut outb = outv.borrow_mut();
             let s = std::str::from_utf8(&outb).unwrap();
             eprintln!("output is\n{}", s);
-            assert_eq!(s, format!("{} ", Word::INT_MASK));
+            assert_eq!(s, format!("{} ", Cell::INT_MASK));
             outb.clear();
         }
 
@@ -7463,7 +7471,7 @@ st1 @ @
             let mut outb = outv.borrow_mut();
             let s = std::str::from_utf8(&outb).unwrap();
             eprintln!("output is\n{}", s);
-            assert_eq!(s, format!("{} ", Word::UINT_MAX-99));
+            assert_eq!(s, format!("{} ", Cell::UINT_MAX-99));
             outb.clear();
         }
 
