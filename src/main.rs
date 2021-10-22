@@ -3015,6 +3015,7 @@ CREATE REPL-PROMPT 2 ALLOT
         }
     }
 
+    // builtin word: ADDR+
     fn builtin_addr_plus(&mut self) -> Result<(), ForthError> {
         let off = self.pop_int()?;
         let addr = self.pop_addr()?;
@@ -3024,6 +3025,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ADDR-
     fn builtin_addr_minus(&mut self) -> Result<(), ForthError> {
         let off = self.pop_int()?;
         let addr = self.pop_addr()?;
@@ -3033,6 +3035,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: DEFER
     fn builtin_defer(&mut self) -> Result<(), ForthError> {
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
         // FIXME: completely unnecessary copy here...
@@ -3042,6 +3045,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: DEFER!
     fn builtin_defer_bang(&mut self) -> Result<(), ForthError> {
         let deferred_xt = self.pop_xt()?;
         let xt = self.pop_xt()?;
@@ -3063,6 +3067,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: DEFER@
     fn builtin_defer_at(&mut self) -> Result<(), ForthError> {
         let deferred_xt = self.pop_xt()?;
 
@@ -3083,6 +3088,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ACTION-OF
     fn builtin_action_of(&mut self) -> Result<(), ForthError> {
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
         let s = self.maybe_string_at(st)?;
@@ -3107,6 +3113,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: IS
     fn builtin_is(&mut self) -> Result<(), ForthError> {
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
         let s = self.maybe_string_at(st)?;
@@ -3131,18 +3138,21 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: >R
     fn builtin_data_to_ret(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
         self.add_instr(Instr::ReturnPush);
         Ok(())
     }
 
+    // builtin word: R>
     fn builtin_ret_to_data(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
         self.add_instr(Instr::ReturnPop);
         Ok(())
     }
 
+    // builtin word: R@
     fn builtin_ret_copy_to_data(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
         self.add_instr(Instr::ReturnCopy);
@@ -3247,6 +3257,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: @
     fn builtin_var_get(&mut self) -> Result<(), ForthError> {
         let addr = self.pop_addr()?;
         let w = self.get_addr_value(addr)?;
@@ -3254,6 +3265,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: !
     fn builtin_var_set(&mut self) -> Result<(), ForthError> {
         let addr = self.pop_addr()?;
         let val = self.pop().ok_or(ForthError::StackUnderflow)?;
@@ -3409,6 +3421,7 @@ CREATE REPL-PROMPT 2 ALLOT
         return Ok(());
     }
 
+    // builtin word: FIND
     fn builtin_find(&mut self) -> Result<(), ForthError> {
         let st = self.pop_str()?;
         let s = self.maybe_counted_string_at(st)?;
@@ -3431,6 +3444,7 @@ CREATE REPL-PROMPT 2 ALLOT
         }
     }
 
+    // builtin word: FIND-NAME
     // (caddr u -- xt 1 | xt -1 | caddr u 0)
     fn builtin_find_name(&mut self) -> Result<(), ForthError> {
         let len = self.pop_int()?;
@@ -3464,6 +3478,7 @@ CREATE REPL-PROMPT 2 ALLOT
         }
     }
 
+    // builtin word: >NUMBER
     fn builtin_to_number(&mut self) -> Result<(), ForthError> {
         let base_var = self.get_var_at(ToyForth::ADDR_BASE)?;
         let base_signed = base_var.to_int().ok_or(ForthError::InvalidNumberBase)?;
@@ -3553,6 +3568,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: RECURSE
     fn builtin_recurse(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -3562,6 +3578,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: IMMEDIATE
     fn builtin_immediate(&mut self) -> Result<(),ForthError> {
         let entry = self.dict.last_mut().ok_or(ForthError::DictEmpty)?;
         entry.flags |= DictEntry::IMMEDIATE;
@@ -3569,6 +3586,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: '
     fn builtin_tick(&mut self) -> Result<(),ForthError> {
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
 
@@ -3579,6 +3597,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: COMPILE,
     fn builtin_add_instr(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -3587,6 +3606,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: POSTPONE
     fn builtin_postpone(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -3605,6 +3625,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: [']
     fn builtin_brak_tick(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -3672,6 +3693,7 @@ CREATE REPL-PROMPT 2 ALLOT
         (w0,w1,w2)
     }
 
+    // builtin word: ALLOT
     fn builtin_allot(&mut self) -> Result<(), ForthError> {
         let n = self.pop_int()?;
 
@@ -3683,6 +3705,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: CELL+
     fn builtin_cell_plus(&mut self) -> Result<(), ForthError> {
         let addr = self.pop_var_addr()?;
 
@@ -3694,6 +3717,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ,
     fn builtin_comma(&mut self) -> Result<(), ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
@@ -3758,6 +3782,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(ToyForth::free_field_number(num, base, out, min_width, trailing))
     }
 
+    // builtin word: ..
     fn builtin_dot_dot(&mut self) -> Result<(), ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
@@ -3778,6 +3803,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: U.
     fn builtin_u_dot(&mut self) -> Result<(), ForthError> {
         let u = self.pop_uint()?;
 
@@ -3794,6 +3820,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: U.R
     fn builtin_u_dot_r(&mut self) -> Result<(), ForthError> {
         let n = self.pop_int()?;
         let u = self.pop_uint()?;
@@ -3815,11 +3842,13 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: PIC
     fn builtin_pic(&mut self) -> Result<(), ForthError> {
         self.push_str(ST::pic_space(0,std::cmp::min(u8::MAX as usize, self.pic.len()) as u8))?;
         Ok(())
     }
 
+    // builtin word: CALLOT
     fn builtin_callot(&mut self) -> Result<(), ForthError> {
         let n = self.pop_int()?;
 
@@ -3843,17 +3872,20 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: /INPUT-LENGTH
     fn builtin_input_len(&mut self) -> Result<(), ForthError> {
         // TODO: check for overflow!
         self.push_int(self.input.len() as i32)?;
         Ok(())
     }
 
+    // builtin word: PAD
     fn builtin_pad(&mut self) -> Result<(), ForthError> {
         self.push_str(ST::pad_space(0,std::cmp::min(u8::MAX as usize, self.pad.len()) as u8))?;
         Ok(())
     }
 
+    // builtin word: CSHRINK
     fn builtin_cshrink(&mut self) -> Result<(), ForthError> {
         let len = self.pop_int()?;
         let st = self.pop_str()?;
@@ -3886,12 +3918,14 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: CLENGTH
     fn builtin_clength(&mut self) -> Result<(), ForthError> {
         let st = self.pop_str()?;
         self.push_int(st.len() as i32)?;
         Ok(())
     }
 
+    // builtin word: CREATE
     fn builtin_create(&mut self) -> Result<(), ForthError> {
         self.push_int(' ' as i32)?;
         self.builtin_parse()?;
@@ -3936,6 +3970,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: DOES>
     fn builtin_does(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;  // see gforth's interpration semantics?
 
@@ -3966,6 +4001,7 @@ CREATE REPL-PROMPT 2 ALLOT
         }
     }
 
+    // builtin word: >BODY
     fn builtin_body(&mut self) -> Result<(), ForthError> {
         let xt = self.pop_xt()?;
 
@@ -3974,11 +4010,13 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: /EMPTY-RETURN
     fn builtin_empty_return(&mut self) -> Result<(), ForthError> {
         self.rstack.clear();
         Ok(())
     }
 
+    // builtin word: /CLEAR-COMPILE-STATE
     fn builtin_clear_compile_state(&mut self) -> Result<(), ForthError> {
         self.set_var_at(ToyForth::ADDR_SLASH_CDEF, Cell(0))?;
         self.set_var_at(ToyForth::ADDR_SLASH_CXT, Cell(0))?;
@@ -4011,6 +4049,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Err(ForthError::NotImplemented)
     }
 
+    // builtin word: CONSTANT
     fn builtin_constant(&mut self) -> Result<(), ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
 
@@ -4030,6 +4069,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: VARIABLE
     fn builtin_variable(&mut self) -> Result<(), ForthError> {
         self.push_int(' ' as i32)?;
         self.builtin_parse()?;
@@ -4049,6 +4089,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: :
     fn builtin_colon(&mut self) -> Result<(), ForthError> {
         self.check_not_in_bracket()?;
         // TODO: check not defining
@@ -4076,6 +4117,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: :NONAME
     fn builtin_colon_noname(&mut self) -> Result<(), ForthError> {
         self.check_not_in_bracket()?;
         self.check_not_compiling()?;
@@ -4091,6 +4133,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ;
     fn builtin_semi(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4130,6 +4173,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: EXIT
     fn builtin_exit(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4141,6 +4185,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: UNLOOP
     fn builtin_unloop(&mut self) -> Result<(), ForthError> {
         // TODO: add some safety here
         //
@@ -4152,6 +4197,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: [
     fn builtin_obracket(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
         self.set_var_at(ToyForth::ADDR_SLASH_BRACKET, Cell::int(1))?;
@@ -4159,6 +4205,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ]
     fn builtin_cbracket(&mut self) -> Result<(), ForthError> {
         self.check_interpreting()?;
         self.set_var_at(ToyForth::ADDR_SLASH_BRACKET, Cell::int(0))?;
@@ -4166,6 +4213,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: LITERAL
     fn builtin_literal(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4175,6 +4223,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: IF
     fn builtin_if(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4185,6 +4234,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: THEN
     fn builtin_then(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4209,6 +4259,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ELSE
     fn builtin_else(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4228,6 +4279,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: CASE
     fn builtin_case(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
         self.add_instr(Instr::Branch(2));
@@ -4237,6 +4289,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: OF
     fn builtin_of(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4251,6 +4304,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ENDOF
     fn builtin_endof(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4272,6 +4326,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ENDCASE
     fn builtin_endcase(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4291,6 +4346,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: BEGIN
     fn builtin_begin(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4299,6 +4355,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: AGAIN
     fn builtin_again(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4312,6 +4369,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: UNTIL
     fn builtin_until(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4325,6 +4383,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: WHILE
     fn builtin_while(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4339,6 +4398,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: REPEAT
     fn builtin_repeat(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4358,6 +4418,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: LEAVE
     fn builtin_leave(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4377,6 +4438,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: DO
     fn builtin_do(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4390,6 +4452,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ?DO
     fn builtin_qdo(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4468,14 +4531,17 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: +LOOP
     fn builtin_loop(&mut self) -> Result<(), ForthError> {
         self.compile_loop(false)
     }
 
+    // builtin word: +LOOP
     fn builtin_plus_loop(&mut self) -> Result<(), ForthError> {
         self.compile_loop(true)
     }
 
+    // builtin word: I
     fn builtin_loop_ind0(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4485,6 +4551,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: J
     fn builtin_loop_ind1(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4544,7 +4611,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(self.source.substr(word_off as u8, len as u8))
     }
 
-    // [CHAR]
+    // builtin word: [CHAR]
     fn builtin_brak_char(&mut self) -> Result<(), ForthError> {
         self.check_compiling()?;
 
@@ -4561,6 +4628,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: CHAR
     fn builtin_char(&mut self) -> Result<(), ForthError> {
         let st = self.next_word(' ' as u8, u8::MAX as usize)?;
 
@@ -4574,6 +4642,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: C!
     fn builtin_char_bang(&mut self) -> Result<(), ForthError> {
         let addr = self.pop_addr()?;
         // let ch = self.pop_char()?;
@@ -4583,6 +4652,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: C@
     fn builtin_char_at(&mut self) -> Result<(), ForthError> {
         let addr = self.pop_addr()?;
         let w = self.get_addr_value(addr)?;
@@ -4592,12 +4662,14 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: CHAR+
     fn builtin_char_plus(&mut self) -> Result<(), ForthError> {
         let st = self.pop_str()?;
         self.push(st.offset(1).to_cell())?;
         Ok(())
     }
 
+    // builtin word: WORD
     fn builtin_word(&mut self) -> Result<(), ForthError> {
         let delim = self.pop_char()?;
 
@@ -4621,6 +4693,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: PARSE
     fn builtin_parse(&mut self) -> Result<(), ForthError> {
         let delim = self.pop_char()?;
 
@@ -4668,6 +4741,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok((st,len))
     }
 
+    // builtin word: S"
     pub fn builtin_s_quote(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -4678,6 +4752,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: C"
     pub fn builtin_c_quote(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -4687,6 +4762,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: TYPE
     pub fn builtin_type(&mut self) -> Result<(),ForthError> {
         let len = self.pop_int()?;
         let st = self.pop_str()?;
@@ -4702,6 +4778,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: /ETYPE
     pub fn builtin_err_type(&mut self) -> Result<(),ForthError> {
         let _len = self.pop_int()?;
         let st = self.pop_str()?;
@@ -4712,6 +4789,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: ."
     pub fn builtin_dot_quote(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -4740,6 +4818,7 @@ CREATE REPL-PROMPT 2 ALLOT
         }
     }
 
+    // builtin word: S\"
     pub fn builtin_s_backslash_quote(&mut self) -> Result<(),ForthError> {
         let bytes = &self.input.as_bytes();
 
@@ -4845,6 +4924,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: .(
     pub fn builtin_dot_oparen(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -4854,6 +4934,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: (
     pub fn builtin_oparen(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -4865,12 +4946,14 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: \
     pub fn builtin_backslash(&mut self) -> Result<(),ForthError> {
         self.input_off = self.input.len();
 
         Ok(())
     }
 
+    // builtin word: E"
     pub fn builtin_err_quote(&mut self) -> Result<(),ForthError> {
         self.check_compiling()?;
 
@@ -4882,12 +4965,14 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: .E
     pub fn builtin_dot_e(&mut self) -> Result<(),ForthError> {
         let w = self.pop().ok_or(ForthError::StackUnderflow)?;
         eprintln!("{} ", w);
         Ok(())
     }
 
+    // builtin word: DEPTH
     pub fn builtin_depth(&mut self) -> Result<(),ForthError> {
         let depth = self.stack_depth();
         // TODO: check for overflow!
@@ -4895,6 +4980,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: CONTROL-DEPTH
     pub fn builtin_control_depth(&mut self) -> Result<(),ForthError> {
         let depth = self.cstack_depth();
         // TODO: check for overflow!
@@ -4902,6 +4988,7 @@ CREATE REPL-PROMPT 2 ALLOT
         Ok(())
     }
 
+    // builtin word: RETURN-DEPTH
     pub fn builtin_return_depth(&mut self) -> Result<(),ForthError> {
         let depth = self.rstack_depth();
         // TODO: check for overflow!
@@ -4916,23 +5003,27 @@ CREATE REPL-PROMPT 2 ALLOT
         VarAddr(here as u32)
     }
 
+    // builtin word: HERE
     pub fn builtin_here(&mut self) -> Result<(),ForthError> {
         self.push(self.here().to_cell())?;
         Ok(())
     }
 
+    // builtin word: CODE-HERE
     pub fn builtin_code_here(&mut self) -> Result<(),ForthError> {
         // check for overflow!
         self.push_uint(self.code_size())?;
         Ok(())
     }
 
+    // builtin word: CHAR-HERE
     pub fn builtin_char_here(&mut self) -> Result<(),ForthError> {
         // check for overflow!
         self.push_uint(self.char_here())?;
         Ok(())
     }
 
+    // builtin word: UNUSED
     pub fn builtin_unused(&mut self) -> Result<(),ForthError> {
         let here = self.vars.len();
         let unused = Cell::INT_MAX - (here as i32);
